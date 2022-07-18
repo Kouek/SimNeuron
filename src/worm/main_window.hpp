@@ -41,9 +41,16 @@ class MainWindow : public QWidget {
         glView = new GLView();
         ui->groupBoxView->layout()->addWidget(glView);
 
+        ui->groupBoxReg->setEnabled(false);
+        ui->groupBoxWNPD->setEnabled(false);
+        ui->groupBoxLighting->setEnabled(false);
+
         // slots
         connect(ui->toolButtonBroswerWPD, &QToolButton::clicked, [&]() {
-            ui->toolButtonBroswerWNPD->setEnabled(false);
+            wpd.reset();
+            wnpd.reset();
+            ui->groupBoxWNPD->setEnabled(false);
+            ui->groupBoxReg->setEnabled(false);
             auto path = QFileDialog::getOpenFileName(
                 this, tr("Open Worm Position Data"));
             if (path.isEmpty())
@@ -58,15 +65,20 @@ class MainWindow : public QWidget {
                 ui->labelMinTimeStep->setText(QString::number(0));
                 ui->labelMaxTimeStep->setText(
                     QString::number(wpd->GetVerts().size() - 1));
+                ui->groupBoxWNPD->setEnabled(true);
 
-                ui->toolButtonBroswerWNPD->setEnabled(true);
+                // cascading slots
                 ui->radioButtonViewIn3D->clicked(
                     ui->radioButtonViewIn3D->isChecked());
+
+                renderer->SetRenderTarget(WormRenderer::RenderTarget::Worm);
+                glView->update();
             } catch (std::exception &e) {
                 ui->labelWPDPath->setText(e.what());
             }
         });
         connect(ui->toolButtonBroswerWNPD, &QToolButton::clicked, [&]() {
+            wnpd.reset();
             auto path = QFileDialog::getOpenFileName(
                 this, tr("Open Worm Neuron Position Data"));
             if (path.isEmpty())
@@ -77,15 +89,35 @@ class MainWindow : public QWidget {
                     path.toStdString(), wpd);
 
                 ui->labelWNPDPath->setText(path);
+                ui->groupBoxReg->setEnabled(true);
+                
+                // cascading slots
                 ui->radioButtonViewIn3D->clicked(
                     ui->radioButtonViewIn3D->isChecked());
+                ui->pushButtonCurveFit->clicked();
+
+                glView->update();
             } catch (std::exception &e) {
                 ui->labelWNPDPath->setText(e.what());
             }
         });
+        connect(ui->pushButtonCurveFit, &QPushButton::clicked, [&]() {
+            glView->makeCurrent();
+            wnpd->PolyCurveFitWith(ui->spinBoxCurveFitOrder->value(),
+                                   ui->spinBoxRANSAC_ST->value(),
+                                   ui->doubleSpinBoxRANSAC_IHW->value());
+            renderer->SetRenderTarget(WormRenderer::RenderTarget::Neuron);
+            glView->update();
+        });
         connect(ui->radioButtonViewIn3D, &QRadioButton::clicked,
                 [&](bool checked) {
                     is3D = checked;
+                    ui->groupBoxLighting->setEnabled(is3D);
+
+                    std::pair<WormRenderer::RenderTarget, bool> lastRT{
+                        WormRenderer::RenderTarget::Worm, false};
+                    if (renderer)
+                        lastRT = {renderer->GetRenderTarget(), true};
                     if (checked) {
                         renderer = std::make_shared<WormRenderer3D>();
                         dynamic_cast<WormRenderer3D *>(renderer.get())
@@ -94,7 +126,10 @@ class MainWindow : public QWidget {
                         renderer = std::make_shared<WormRenderer2D>();
                     renderer->SetWormPositionDat(wpd);
                     renderer->SetWormNeuronPositionDat(wnpd);
+                    if (lastRT.second)
+                        renderer->SetRenderTarget(lastRT.first);
                     glView->SetRenderer(renderer);
+                    
                     // cascading slots
                     ui->radioButtonViewWireFrame->clicked(
                         ui->radioButtonViewWireFrame->isChecked());
@@ -102,6 +137,8 @@ class MainWindow : public QWidget {
                         ui->comboBoxSceneMode->currentIndex());
                     ui->horizontalSliderTiemStep->valueChanged(
                         ui->horizontalSliderTiemStep->value());
+                    if (is3D)
+                        syncFromLightParam();
                     glView->GLResized(glView->width(), glView->height());
                     glView->update();
                 });
@@ -118,12 +155,82 @@ class MainWindow : public QWidget {
                         renderer->SetSceneMode(
                             static_cast<WormRenderer::SceneMode>(idx));
                     glView->update();
-            });
+                });
         connect(ui->horizontalSliderTiemStep, &QSlider::valueChanged,
                 [&](int val) {
                     if (renderer)
                         renderer->SetTimeStep(val);
                     ui->labelTimeStep->setText(QString::number(val));
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxAmbientStrength,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.ambientStrength = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightR,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightColor.r = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightG,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightColor.g = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightB,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightColor.b = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightX,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightPos.x = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightY,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightPos.y = val;
+                    ptr->SetLightParam(param);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxLightZ,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    WormRenderer3D *ptr =
+                        dynamic_cast<WormRenderer3D *>(renderer.get());
+                    auto param = ptr->GetLightParam();
+                    param.lightPos.z = val;
+                    ptr->SetLightParam(param);
                     glView->update();
                 });
         connect(glView, &GLView::GLResized, [&](int w, int h) {
@@ -133,7 +240,7 @@ class MainWindow : public QWidget {
                 dynamic_cast<WormRenderer3D *>(renderer.get())
                     ->SetCamera(camera.getViewMat(),
                                 glm::perspectiveFov(glm::radians(fov), (float)w,
-                                                    (float)h, .1f, 10.f));
+                                                    (float)h, .001f, 10.f));
         });
         connect(glView, &GLView::KeyPressed, [&](int key, int funcKey) {
             glView->makeCurrent();
@@ -173,6 +280,18 @@ class MainWindow : public QWidget {
             glView->GLResized(glView->width(), glView->height());
             glView->update();
         });
+    }
+
+  private:
+    inline void syncFromLightParam() {
+        ui->doubleSpinBoxAmbientStrength->valueChanged(
+            ui->doubleSpinBoxAmbientStrength->value());
+        ui->doubleSpinBoxLightR->valueChanged(ui->doubleSpinBoxLightR->value());
+        ui->doubleSpinBoxLightG->valueChanged(ui->doubleSpinBoxLightG->value());
+        ui->doubleSpinBoxLightB->valueChanged(ui->doubleSpinBoxLightB->value());
+        ui->doubleSpinBoxLightX->valueChanged(ui->doubleSpinBoxLightX->value());
+        ui->doubleSpinBoxLightY->valueChanged(ui->doubleSpinBoxLightY->value());
+        ui->doubleSpinBoxLightZ->valueChanged(ui->doubleSpinBoxLightZ->value());
     }
 };
 } // namespace kouek

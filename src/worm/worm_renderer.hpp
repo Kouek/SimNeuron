@@ -16,11 +16,13 @@ namespace kouek {
 class WormRenderer {
   public:
     enum class SceneMode : uint8_t { Full, Focus };
+    enum class RenderTarget : uint8_t { Worm, Neuron, WormAndNeuron };
 
   protected:
     bool drawWireFrame = false;
     bool sceneModeChanged = true, timeStepChanged = true;
     SceneMode sceneMode = SceneMode::Full;
+    RenderTarget renderTarget = RenderTarget::Worm;
     size_t timeStep = 0;
     std::shared_ptr<WormPositionData> wpd;
     std::shared_ptr<WormNeuronPositionData> wnpd;
@@ -46,6 +48,10 @@ class WormRenderer {
         sceneModeChanged = true;
         timeStepChanged = true;
     }
+    virtual void SetRenderTarget(RenderTarget renderTarget) {
+        this->renderTarget = renderTarget;
+    }
+    inline auto GetRenderTarget() const { return renderTarget; }
     virtual void Render() = 0;
 };
 
@@ -102,7 +108,7 @@ class WormRenderer2D : public WormRenderer {
         if (timeStepChanged)
             timeStepChanged = false;
         if (wpd) {
-            wormShader->setVec4("color", glm::vec4{1.f});
+            wormShader->setVec3("color", glm::vec3{1.f});
             glBindVertexArray(wpd->GetVAO());
             glDrawArrays(GL_LINE_STRIP, timeStep * wormVertCnt, wormVertCnt);
             glBindVertexArray(0);
@@ -117,11 +123,19 @@ class WormRenderer2D : public WormRenderer {
 };
 
 class WormRenderer3D : public WormRenderer {
+  public:
+    struct LightParam {
+        float ambientStrength = .1f;
+        glm::vec3 lightColor{1.f};
+        glm::vec3 lightPos{0, 0, .5f};
+    };
+
   private:
-    bool cameraChanged = true, divNumChanged = true;
+    bool cameraChanged = true, divNumChanged = true, lightChanged = true;
     uint8_t divNum;
-    size_t wormVertCnt, nuroVertCnt;
+    size_t wormVertCnt, nuroVertCnt, curveVertCnt;
     glm::mat4 view, proj;
+    LightParam lightParam;
     std::unique_ptr<Shader> wormShader, nuroShader;
 
   public:
@@ -159,12 +173,17 @@ class WormRenderer3D : public WormRenderer {
     void SetDivisionNum(uint8_t divNum) {
         this->divNum = divNum;
         divNumChanged = true;
-    }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+    }
     void SetCamera(const glm::mat4 &view, const glm::mat4 &proj) {
         this->view = view;
         this->proj = proj;
         cameraChanged = true;
     }
+    void SetLightParam(const LightParam &param) {
+        lightParam = param;
+        lightChanged = true;
+    }
+    const auto &GetLightParam() const { return lightParam; }
     void Render() override {
         if (divNumChanged) {
             wormShader->use();
@@ -199,7 +218,8 @@ class WormRenderer3D : public WormRenderer {
             }
             sceneModeChanged = false;
         }
-        if (sceneMode == SceneMode::Focus && timeStepChanged && wpd) {
+        if (sceneMode == SceneMode::Focus &&
+            renderTarget != RenderTarget::Neuron && timeStepChanged && wpd) {
             wormShader->use();
             auto [min, max] = wpd->GetPosRangeOf(timeStep);
             glm::vec3 offset{-.5f * (max + min), 0};
@@ -224,26 +244,45 @@ class WormRenderer3D : public WormRenderer {
 
             cameraChanged = false;
         }
+        if (lightChanged) {
+            wormShader->use();
+            wormShader->setFloat("ambientStrength", lightParam.ambientStrength);
+            wormShader->setVec3("lightColor", lightParam.lightColor);
+            wormShader->setVec3("lightPos", lightParam.lightPos);
+
+            lightChanged = false;
+        }
 
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
 
         if (drawWireFrame)
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        if (wpd) {
+        switch (renderTarget) {
+        case RenderTarget::Worm:
+            if (!wpd)
+                break;
             wormShader->use();
-            wormShader->setVec4("color", glm::vec4{.2f, .3f, .4f, .5f});
+            wormShader->setVec3("color", glm::vec3{.2f, .3f, .4f});
             glBindVertexArray(wpd->GetVAO());
             glDrawArrays(GL_LINE_STRIP, timeStep * wormVertCnt, wormVertCnt);
             glBindVertexArray(0);
-        }
-        if (wnpd) {
+            break;
+        case RenderTarget::Neuron:
+            if (!wnpd)
+                break;
             nuroShader->use();
-            nuroShader->setVec4("color", glm::vec4{.3f, .1f, 1.f, .5f});
-            glBindVertexArray(wnpd->GetVAO());
+            nuroShader->setVec3("color", glm::vec3{.3f, .1f, 1.f});
             glPointSize(3.f);
+            glBindVertexArray(wnpd->GetVAO());
             glDrawArrays(GL_POINTS, timeStep * nuroVertCnt, nuroVertCnt);
+
+            nuroShader->setVec3("color", glm::vec3{.3f, 1.f, .1f});
+            glBindVertexArray(wnpd->GetCurveVAO());
+            glDrawArrays(GL_POINTS, 0,
+                         WormNeuronPositionData::CURVE_VERT_COUNT);
             glBindVertexArray(0);
+            break;
         }
         if (drawWireFrame)
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
