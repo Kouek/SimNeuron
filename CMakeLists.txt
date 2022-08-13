@@ -4,6 +4,7 @@ project("SimNeuron" LANGUAGES CXX C)
 
 option("${PROJECT_NAME}_SIM_MOUSE" "Build mouse neuron simulation" ON)
 option("${PROJECT_NAME}_SIM_WORM" "Build worm neuron simulation" ON)
+option("${PROJECT_NAME}_BUILD_TESTS" "Build tests" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,3 +40,7 @@ include_directories(${THIRDPARTY_DIR})
 include_directories("${THIRDPARTY_DIR}/glad/include")
 
 add_subdirectory("src")
+if(${${PROJECT_NAME}_BUILD_TESTS})
+	set(TEST_DIR "${CMAKE_CURRENT_LIST_DIR}/test")
+	add_subdirectory("${TEST_DIR}/point_octree")
+endif()

@@ -4,8 +4,8 @@
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include <QtWidgets/qopenglwidget.h>
 #include <QtGui/qevent.h>
+#include <QtWidgets/qopenglwidget.h>
 
 #include "worm_renderer.hpp"
 
@@ -36,6 +36,9 @@ class GLView : public QOpenGLWidget {
   signals:
     void GLResized(int w, int h);
     void KeyPressed(int key, int funcKey = -1);
+    void MousePressed(const glm::vec2 &normPos);
+    void MouseMoved(const glm::vec2 &normPos);
+    void MouseReleased(const glm::vec2 &normPos);
 
   protected:
     void initializeGL() override {
@@ -64,13 +67,28 @@ class GLView : public QOpenGLWidget {
             emit KeyPressed(e->key(), funcKey);
         }
     }
-    void keyReleaseEvent(QKeyEvent* e) {
+    void keyReleaseEvent(QKeyEvent *e) {
         switch (e->key()) {
         case Qt::Key_Shift:
         case Qt::Key_Control:
             funcKey = -1;
             break;
         }
+    }
+    void mousePressEvent(QMouseEvent *e) {
+        e->accept();
+        emit MousePressed(glm::vec2{(float)e->pos().x() / width(),
+                                    1.f - (float)e->pos().y() / height()});
+    }
+    void mouseMoveEvent(QMouseEvent *e) {
+        e->accept();
+        emit MouseMoved(glm::vec2{(float)e->pos().x() / width(),
+                                  1.f - (float)e->pos().y() / height()});
+    }
+    void mouseReleaseEvent(QMouseEvent *e) {
+        e->accept();
+        emit MouseReleased(glm::vec2{(float)e->pos().x() / width(),
+                                     1.f - (float)e->pos().y() / height()});
     }
 };
 } // namespace kouek

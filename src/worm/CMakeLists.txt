@@ -1,5 +1,6 @@
 set(TARGET_NAME "SimWorm")
 
+message(STATUS "Building Target: ${TARGET_NAME}")
 file(GLOB SRC "*.cpp")
 message(STATUS "SRC: ${SRC}")
 file(GLOB HEADER_ONLY_SRC "*.hpp")

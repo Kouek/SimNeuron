@@ -113,12 +113,6 @@ class WormRenderer2D : public WormRenderer {
             glDrawArrays(GL_LINE_STRIP, timeStep * wormVertCnt, wormVertCnt);
             glBindVertexArray(0);
         }
-        // if (wnpd) {
-        //    shader->setVec4("color", glm::vec4{1.f, .5f, .1f, 1.f});
-        //    glBindVertexArray(wnpd->GetVAO2D());
-        //    glDrawArrays(GL_POINTS, 0, wnpd->GetSize());
-        //    glBindVertexArray(0);
-        //}
     }
 };
 
@@ -213,9 +207,9 @@ class WormRenderer3D : public WormRenderer {
                          glm::translate(glm::identity<glm::mat4>(), offset);
                 wormShader->use();
                 wormShader->setMat4("M", M);
-                nuroShader->use();
-                nuroShader->setMat4("M", M);
             }
+            nuroShader->use();
+            nuroShader->setMat4("M", glm::identity<glm::mat4>());
             sceneModeChanged = false;
         }
         if (sceneMode == SceneMode::Focus &&
@@ -229,8 +223,6 @@ class WormRenderer3D : public WormRenderer {
                      glm::translate(glm::identity<glm::mat4>(), offset);
             wormShader->use();
             wormShader->setMat4("M", M);
-            nuroShader->use();
-            nuroShader->setMat4("M", M);
         }
         if (timeStepChanged)
             timeStepChanged = false;
@@ -277,6 +269,16 @@ class WormRenderer3D : public WormRenderer {
             glBindVertexArray(wnpd->GetVAO());
             glDrawArrays(GL_POINTS, timeStep * nuroVertCnt, nuroVertCnt);
 
+            glPointSize(6.f);
+            nuroShader->setVec3("color", glm::vec3{1.f, .1f, .3f});
+            glBindVertexArray(wnpd->GetSelectedVAO());
+            glDrawElements(GL_POINTS, wnpd->GetSelectedVertCnt(),
+                           GL_UNSIGNED_INT, 0);
+
+            glBindVertexArray(wnpd->GetSelctingFrameVAO());
+            glDrawElements(GL_LINE_STRIP, 5, GL_UNSIGNED_BYTE, 0);
+
+            glPointSize(3.f);
             nuroShader->setVec3("color", glm::vec3{.3f, 1.f, .1f});
             glBindVertexArray(wnpd->GetCurveVAO());
             glDrawArrays(GL_POINTS, 0,

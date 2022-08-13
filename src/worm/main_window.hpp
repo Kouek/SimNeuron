@@ -5,10 +5,12 @@
 
 #include <QtWidgets/qfiledialog.h>
 #include <QtWidgets/qwidget.h>
+#include <QtWidgets/qgraphicsview.h>
 
 #include <ui_main_window.h>
 
 #include <cmake_in.h>
+#include <util/math.h>
 #include <util/FPS_camera.h>
 
 #include "gl_view.hpp"
@@ -22,14 +24,21 @@ class MainWindow : public QWidget {
     Q_OBJECT
 
   private:
+    static constexpr float N_CLIP = .001f;
+    static constexpr float F_CLIP = 10.F;
+
     Ui::MainWindow *ui;
     GLView *glView;
+
     std::shared_ptr<WormPositionData> wpd;
     std::shared_ptr<WormNeuronPositionData> wnpd;
     std::shared_ptr<WormRenderer> renderer;
 
     bool is3D = false;
+    bool isSelectingInliers = false;
     float fov = 60.f;
+    glm::mat4 proj, unProj;
+    std::array<glm::vec2, 2> inliersSelectFrame;
     FPSCamera camera;
 
   public:
@@ -39,6 +48,7 @@ class MainWindow : public QWidget {
         ui->setupUi(this);
 
         glView = new GLView();
+        ui->groupBoxView->setLayout(new QVBoxLayout);
         ui->groupBoxView->layout()->addWidget(glView);
 
         ui->groupBoxReg->setEnabled(false);
@@ -90,23 +100,52 @@ class MainWindow : public QWidget {
 
                 ui->labelWNPDPath->setText(path);
                 ui->groupBoxReg->setEnabled(true);
+                ui->comboBoxSceneMode->setCurrentIndex(
+                    static_cast<int>(WormRenderer::SceneMode::Full));
+                ui->comboBoxSceneMode->setEnabled(false);
                 
                 // cascading slots
                 ui->radioButtonViewIn3D->clicked(
                     ui->radioButtonViewIn3D->isChecked());
-                ui->pushButtonCurveFit->clicked();
 
+                renderer->SetRenderTarget(WormRenderer::RenderTarget::Neuron);
                 glView->update();
             } catch (std::exception &e) {
                 ui->labelWNPDPath->setText(e.what());
             }
         });
-        connect(ui->pushButtonCurveFit, &QPushButton::clicked, [&]() {
+        connect(ui->pushButtonSlctInlierOrFitCurve, &QPushButton::clicked,
+                [&]() {
+                    if (renderer->GetRenderTarget() !=
+                        WormRenderer::RenderTarget::Neuron)
+                        return;
+                    isSelectingInliers = !isSelectingInliers;
+                    static constexpr char *SELECT_INLIERS_TXT =
+                        "Select Inliers";
+                    static constexpr char *POLY_FIT_CURVE_TXT =
+                        "Poly Fit Curve";
+
+                    glView->makeCurrent();
+                    if (isSelectingInliers)
+                        ui->pushButtonSlctInlierOrFitCurve->setText(
+                            POLY_FIT_CURVE_TXT);
+                    else {
+                        ui->pushButtonSlctInlierOrFitCurve->setText(
+                            SELECT_INLIERS_TXT);
+                        static constexpr std::array<glm::vec3, 4> zeroes{
+                            glm::zero<glm::vec3>()};
+                        wnpd->PolyCurveFitWith(
+                            ui->spinBoxCurveFitOrder->value());
+                        wnpd->SetSelectedFrame(zeroes);
+                        wnpd->UnselectInliers();
+                    }
+                    glView->update();
+            });
+        connect(ui->pushButtonReg, &QPushButton::clicked, [&]() {
             glView->makeCurrent();
-            wnpd->PolyCurveFitWith(ui->spinBoxCurveFitOrder->value(),
-                                   ui->spinBoxRANSAC_ST->value(),
-                                   ui->doubleSpinBoxRANSAC_IHW->value());
-            renderer->SetRenderTarget(WormRenderer::RenderTarget::Neuron);
+            wnpd->RegisterWithWPD();
+            renderer->SetRenderTarget(
+                WormRenderer::RenderTarget::WormAndNeuron);
             glView->update();
         });
         connect(ui->radioButtonViewIn3D, &QRadioButton::clicked,
@@ -118,7 +157,7 @@ class MainWindow : public QWidget {
                         WormRenderer::RenderTarget::Worm, false};
                     if (renderer)
                         lastRT = {renderer->GetRenderTarget(), true};
-                    if (checked) {
+                    if (is3D) {
                         renderer = std::make_shared<WormRenderer3D>();
                         dynamic_cast<WormRenderer3D *>(renderer.get())
                             ->SetDivisionNum(16);
@@ -236,11 +275,13 @@ class MainWindow : public QWidget {
         connect(glView, &GLView::GLResized, [&](int w, int h) {
             if (!renderer)
                 return;
-            if (is3D)
+            if (is3D) {
+                proj = glm::perspectiveFov(glm::radians(fov), (float)w,
+                                           (float)h, N_CLIP, F_CLIP);
+                unProj = Math::inverseProjective(proj);
                 dynamic_cast<WormRenderer3D *>(renderer.get())
-                    ->SetCamera(camera.getViewMat(),
-                                glm::perspectiveFov(glm::radians(fov), (float)w,
-                                                    (float)h, .001f, 10.f));
+                    ->SetCamera(camera.getViewMat(), proj);
+            }
         });
         connect(glView, &GLView::KeyPressed, [&](int key, int funcKey) {
             glView->makeCurrent();
@@ -278,6 +319,84 @@ class MainWindow : public QWidget {
                 break;
             }
             glView->GLResized(glView->width(), glView->height());
+            glView->update();
+        });
+        connect(glView, &GLView::MousePressed, [&](const glm::vec2 &normPos) {
+            if (!isSelectingInliers)
+                return;
+            inliersSelectFrame[0] = normPos;
+        });
+        connect(glView, &GLView::MouseMoved, [&](const glm::vec2 &normPos) {
+            if (!isSelectingInliers)
+                return;
+            inliersSelectFrame[1] = normPos;
+
+            std::array<glm::vec2, 2> minMax;
+            for (uint8_t xy = 0; xy < 2; ++xy) {
+                if (inliersSelectFrame[0][xy] < inliersSelectFrame[1][xy]) {
+                    minMax[0][xy] = inliersSelectFrame[0][xy];
+                    minMax[1][xy] = inliersSelectFrame[1][xy];
+                } else {
+                    minMax[0][xy] = inliersSelectFrame[1][xy];
+                    minMax[1][xy] = inliersSelectFrame[0][xy];
+                }
+                minMax[0][xy] = 2.f * minMax[0][xy] - 1.f;
+                minMax[1][xy] = 2.f * minMax[1][xy] - 1.f;
+            }
+            if (is3D) {
+                auto [R, F, U, P] = camera.getRFUP();
+                glm::mat3 cameraRot{R.x, R.y,  R.z,  U.x, U.y,
+                                    U.z, -F.x, -F.y, -F.z};
+                std::array<glm::vec3, 4> verts;
+                glm::vec4 tmp{0, 0, 1.f, 1.f};
+                for (uint8_t vIdx = 0; vIdx < 4; ++vIdx) {
+                    tmp.x = minMax[(vIdx & 0x1) ? 1 : 0].x;
+                    tmp.y = minMax[(vIdx & 0x2) ? 1 : 0].y;
+                    verts[vIdx] = unProj * tmp;
+                    verts[vIdx] = glm::normalize(cameraRot * verts[vIdx]);
+                    verts[vIdx] = P + (N_CLIP + F_CLIP) * .5f /
+                                          glm::dot(verts[vIdx], F) *
+                                          verts[vIdx];
+                }
+                glView->makeCurrent();
+                wnpd->SetSelectedFrame(verts);
+                glView->update();
+            }
+        });
+        connect(glView, &GLView::MouseReleased, [&](const glm::vec2 &normPos) {
+            if (!isSelectingInliers)
+                return;
+            inliersSelectFrame[1] = normPos;
+            if (glm::distance(inliersSelectFrame[0], inliersSelectFrame[1]) <=
+                .1f)
+                return;
+            for (uint8_t xy = 0; xy < 2; ++xy) {
+                if (inliersSelectFrame[0][xy] > inliersSelectFrame[1][xy])
+                    std::swap(inliersSelectFrame[0][xy],
+                              inliersSelectFrame[1][xy]);
+                inliersSelectFrame[0][xy] =
+                    2.f * inliersSelectFrame[0][xy] - 1.f;
+                inliersSelectFrame[1][xy] =
+                    2.f * inliersSelectFrame[1][xy] - 1.f;
+            }
+
+            glView->makeCurrent();
+            if (is3D) {
+                auto [R, F, U, P] = camera.getRFUP();
+                glm::mat3 cameraRot{R.x, R.y,  R.z,  U.x, U.y,
+                                    U.z, -F.x, -F.y, -F.z};
+                glm::vec4 tmp{0, 0, 1.f, 1.f};
+                std::array<glm::vec3, 4> drcs;
+                for (uint8_t drcIdx = 0; drcIdx < 4; ++drcIdx) {
+                    tmp.x = inliersSelectFrame[(drcIdx & 0x1) ? 1 : 0].x;
+                    tmp.y = inliersSelectFrame[(drcIdx & 0x2) ? 1 : 0].y;
+                    drcs[drcIdx] = unProj * tmp;
+                    drcs[drcIdx] = glm::normalize(cameraRot * drcs[drcIdx]);
+                }
+                Frustum frustum(P, F, N_CLIP, F_CLIP, drcs[0], drcs[2], drcs[1],
+                                drcs[3]);
+                wnpd->SelectAndAppendInliers(frustum);
+            }
             glView->update();
         });
     }
