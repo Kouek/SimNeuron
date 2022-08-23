@@ -1,6 +1,7 @@
 #version 450 core
 
 uniform uint divNum;
+uniform bool reverseNormal;
 uniform mat4 M;
 uniform mat4 VP;
 uniform float coss[32];
@@ -36,7 +37,7 @@ void main() {
         gl_Position = endPos;
         posInWdSp = endPosInWdSp;
         normal.xyz = endN;
-        normal = M * normal;
+        normal = M * (reverseNormal ? -normal : normal);
         EmitVertex();
         
         for (uint idx = 0; idx < divNum; ++idx) {
@@ -50,7 +51,7 @@ void main() {
                        oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c);
             pos = gs_in[0].cntrPos + (normal.xyz = rot * gs_in[0].delta);
             gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
-            normal = M * normal;
+            normal = M * (reverseNormal ? -normal : normal);
             EmitVertex();
 
             gl_Position = endPos;
@@ -60,7 +61,7 @@ void main() {
         pos = gs_in[0].cntrPos + gs_in[0].delta;
         gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
         normal.xyz = endN;
-        normal = M * normal;
+        normal = M * (reverseNormal ? -normal : normal);
         EmitVertex();
 
         EndPrimitive();
@@ -81,13 +82,18 @@ void main() {
                        oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c);
             pos = gs_in[1].cntrPos + (normal.xyz = rot * gs_in[1].delta);
             gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
-            normal = M * normal;
+            normal = M * (reverseNormal ? -normal : normal);
             EmitVertex();
 
             gl_Position = endPos;
             posInWdSp = endPosInWdSp;
             EmitVertex();
         }
+        pos = gs_in[1].cntrPos + gs_in[1].delta;
+        gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
+        normal.xyz = endN;
+        normal = M * (reverseNormal ? -normal : normal);
+        EmitVertex();
 
         EndPrimitive();
     }
@@ -103,7 +109,7 @@ void main() {
                    oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c);
         pos = gs_in[0].cntrPos + (normal.xyz = rot * gs_in[0].delta);
         gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
-        normal = M * normal;
+        normal = M * (reverseNormal ? -normal : normal);
         EmitVertex();
 
         axis = normalize(cross(gs_in[1].delta, vec3(0, 0, -1.0)));
@@ -112,19 +118,19 @@ void main() {
                    oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c);
         pos = gs_in[1].cntrPos + (normal.xyz = rot * gs_in[1].delta);
         gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
-        normal = M * normal;
+        normal = M * (reverseNormal ? -normal : normal);
         EmitVertex();
     }
     pos = gs_in[0].cntrPos + gs_in[0].delta;
     gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
     normal.xyz = gs_in[0].delta;
-    normal = M * normal;
+    normal = M * (reverseNormal ? -normal : normal);
     EmitVertex();
 
     pos = gs_in[1].cntrPos + gs_in[1].delta;
     gl_Position = VP * (posInWdSp = M * vec4(pos, 1.0));
     normal.xyz = gs_in[1].delta;
-    normal = M * normal;
+    normal = M * (reverseNormal ? -normal : normal);
     EmitVertex();
 
     EndPrimitive();

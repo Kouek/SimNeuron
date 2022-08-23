@@ -549,14 +549,34 @@ QGroupBox::title {
        </widget>
       </item>
       <item>
-       <widget class="QRadioButton" name="radioButtonViewIn3D">
-        <property name="text">
-         <string>View in 3D</string>
-        </property>
-        <property name="autoExclusive">
-         <bool>false</bool>
-        </property>
-       </widget>
+       <layout class="QHBoxLayout" name="horizontalLayout_5">
+        <item>
+         <widget class="QLabel" name="label_10">
+          <property name="text">
+           <string>Neuron Half Width</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="doubleSpinBoxNuroHfWid">
+          <property name="decimals">
+           <number>3</number>
+          </property>
+          <property name="maximum">
+           <double>10.000000000000000</double>
+          </property>
+          <property name="singleStep">
+           <double>0.010000000000000</double>
+          </property>
+          <property name="value">
+           <double>0.010000000000000</double>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       <item>
        <widget class="QRadioButton" name="radioButtonViewWireFrame">

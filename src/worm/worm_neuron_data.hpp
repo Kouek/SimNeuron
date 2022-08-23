@@ -13,7 +13,7 @@ namespace kouek {
 
 class WormNeuronPositionData {
   public:
-    constexpr static size_t CURVE_VERT_COUNT = 1000;
+    static constexpr uint8_t CURVE_SAMPLE_MULT = 10;
 
   private:
     class Parser {
@@ -92,12 +92,13 @@ class WormNeuronPositionData {
 
     GLuint VAO, VBO;
     GLuint slctVAO, slctEBO;
-    GLuint slctFrameVAO, slctFrameVBO, slctFrameEBO;
     GLuint curveVAO, curveVBO;
+    size_t wormVertCnt;
     bool inlierFrameDatChanged = true;
     glm::vec3 maxPos{-std::numeric_limits<GLfloat>::infinity()},
         minPos{std::numeric_limits<GLfloat>::infinity()};
-    glm::vec3 offset, scale; // map vertices to [(-1,-1),(1,1)]
+    glm::vec3 inliersMaxPos{-std::numeric_limits<GLfloat>::infinity()},
+        inliersMinPos{std::numeric_limits<GLfloat>::infinity()};
     std::string filePath;
 
     std::vector<glm::vec3> rawDat;
@@ -113,7 +114,6 @@ class WormNeuronPositionData {
     std::unordered_set<size_t> inliers;
 
     std::shared_ptr<WormPositionData> wpd;
-    //std::unique_ptr<PointOctree<size_t>> octree;
 
   public:
     WormNeuronPositionData(std::string_view filePath,
@@ -128,14 +128,14 @@ class WormNeuronPositionData {
                     maxPos[xyz] = pos[xyz];
             }
         }
-        {
-            scale = 2.f / (maxPos - minPos);
-            scale.z = 1.f;
-            offset = -.5f * (minPos + maxPos);
-        }
 
+        if (rawDat.empty() || wpd->GetVerts().empty() ||
+            wpd->GetVerts().front().empty())
+            return;
+        wormVertCnt = wpd->GetVerts().front().size();
         size_t nuroVertCnt = rawDat.size();
         size_t timeCnt = wpd->GetVerts().size();
+
         glGenBuffers(1, &VBO);
         glGenVertexArrays(1, &VAO);
         glBindVertexArray(VAO);
@@ -155,34 +155,17 @@ class WormNeuronPositionData {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, slctEBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLuint) * nuroVertCnt,
                      nullptr, GL_STATIC_DRAW);
-       
-
-        glGenBuffers(1, &slctFrameVBO);
-        glGenBuffers(1, &slctFrameEBO);
-        glGenVertexArrays(1, &slctFrameVAO);
-        glBindVertexArray(slctFrameVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, slctFrameVBO);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VertexDat),
-                              (const void *)0);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(VertexDat) * 4, nullptr,
-                     GL_STATIC_DRAW);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, slctFrameEBO);
-        {
-            std::array<GLubyte, 5> idx{0, 1, 3, 2, 0};
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLubyte) * idx.size(),
-                         idx.data(), GL_STATIC_DRAW);
-        }
 
         glGenBuffers(1, &curveVBO);
         glGenVertexArrays(1, &curveVAO);
         glBindVertexArray(curveVAO);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); // !slctFrameEBO
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
         glBindBuffer(GL_ARRAY_BUFFER, curveVBO);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VertexDat),
                               (const void *)0);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(VertexDat) * CURVE_VERT_COUNT,
+        glBufferData(GL_ARRAY_BUFFER,
+                     sizeof(VertexDat) * wormVertCnt * CURVE_SAMPLE_MULT,
                      nullptr, GL_STATIC_DRAW);
 
         glBindVertexArray(0);
@@ -190,83 +173,104 @@ class WormNeuronPositionData {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
         assignRawDatToVerts();
-        /*octree = std::make_unique<PointOctree<size_t>>(
-            scale * (minPos + offset), scale * (maxPos + offset), 4);
-        if (verts.size() != 0 && verts.front().size() != 0)
-            for (size_t idx = 0; idx < rawDat.size(); ++idx)
-                octree->Insert(verts.front()[idx].pos, idx);*/
     }
     ~WormNeuronPositionData() {
         glDeleteVertexArrays(1, &VAO);
         glDeleteBuffers(1, &VBO);
         glDeleteVertexArrays(1, &slctVAO);
         glDeleteBuffers(1, &slctEBO);
-        glDeleteVertexArrays(1, &slctFrameVAO);
-        glDeleteBuffers(1, &slctFrameVBO);
-        glDeleteBuffers(1, &slctFrameEBO);
         glDeleteVertexArrays(1, &curveVAO);
         glDeleteBuffers(1, &curveVBO);
     }
-    void SetSelectedFrame(const std::array<glm::vec3, 4> &verts) {
-        glBindBuffer(GL_ARRAY_BUFFER, slctFrameVBO);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(VertexDat) * 4,
-                        verts.data());
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
     void PolyCurveFitWith(uint8_t order) {
-        Eigen::VectorXf coeffs = polyCurveFitWith(order);
+        if (rawDat.empty() || wpd->GetVerts().empty() ||
+            wpd->GetVerts().front().empty())
+            return;
 
+        Eigen::VectorXf coeffs = polyCurveFitWith(order);
+        auto curveZ = [&]() {
+            GLfloat z = 0;
+            for (auto idx : inliers)
+                z += rawDat[idx].z;
+            z /= inliers.size();
+            return z;
+        }();
+
+        size_t curveCnt = wormVertCnt * CURVE_SAMPLE_MULT;
         GLfloat x = minPos.x;
-        GLfloat dx = (maxPos.x - minPos.x) / CURVE_VERT_COUNT;
+        GLfloat dx = (maxPos.x - minPos.x) / curveCnt;
         curve.clear();
-        curve.reserve(CURVE_VERT_COUNT);
-        for (size_t stepCnt = 0; stepCnt < CURVE_VERT_COUNT; ++stepCnt) {
+        curve.reserve(curveCnt);
+        for (size_t stepCnt = 0; stepCnt < curveCnt; ++stepCnt) {
             GLfloat curr = 1.f;
             GLfloat y = 0;
             for (uint8_t od = 0; od < order + 1; ++od) {
                 y += coeffs[od] * curr;
                 curr *= x;
             }
-            curve.emplace_back(scale * (glm::vec3{x, y, 0} + offset));
+            curve.emplace_back(glm::vec3{x, y, curveZ});
             x += dx;
         }
         glBindBuffer(GL_ARRAY_BUFFER, curveVBO);
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        sizeof(VertexDat) * CURVE_VERT_COUNT, curve.data());
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(VertexDat) * curveCnt,
+                        curve.data());
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         assignRawDatToVerts();
     }
-    void RegisterWithWPD() {
-
-    }
-    inline void SelectAndAppendInliers(const Frustum& frustm) {
+    void SelectAndAppendInliers(const Frustum &frustm) {
         inlierFrameDatChanged = true;
-        /*auto slcted = octree->Query(frustm);
-        for (auto node : slcted)
-            for (uint8_t datIdx = 0; datIdx < node->datNum; ++datIdx)
-                inliers.emplace(node->dat[datIdx].second);*/
+
         for (size_t vIdx = 0; vIdx < verts.front().size(); ++vIdx)
             if (frustm.IsIntersetcedWith(verts.front()[vIdx].pos))
                 inliers.emplace(vIdx);
         std::vector<GLuint> plainInliers;
         plainInliers.reserve(inliers.size());
-        for (auto id : inliers)
+        for (auto id : inliers) {
             plainInliers.emplace_back(id);
+            auto &pos = rawDat[id];
+            for (uint8_t xyz = 0; xyz < 3; ++xyz) {
+                if (pos[xyz] < inliersMinPos[xyz])
+                    inliersMinPos[xyz] = pos[xyz];
+                if (pos[xyz] > inliersMaxPos[xyz])
+                    inliersMaxPos[xyz] = pos[xyz];
+            }
+        }
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, slctEBO);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
                         sizeof(GLuint) * plainInliers.size(),
                         plainInliers.data());
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     }
-    inline void UnselectInliers() { inliers.clear();
+    inline void UnselectInliers() {
+        inliers.clear();
+        inliersMaxPos = glm::vec3{-std::numeric_limits<GLfloat>::max()};
+        inliersMinPos = glm::vec3{+std::numeric_limits<GLfloat>::max()};
+    }
+    void RegisterWithWPD() {
+        if (curve.empty() || rawDat.empty() || wpd->GetVerts().empty() ||
+            wpd->GetVerts().front().empty())
+            return;
+
+        registerWithWPD();
+
+        size_t nuroVertCnt = rawDat.size();
+        size_t timeCnt = wpd->GetVerts().size();
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        for (size_t t = 0; t < timeCnt; ++t)
+            glBufferSubData(GL_ARRAY_BUFFER,
+                            sizeof(VertexDat) * nuroVertCnt * t,
+                            sizeof(VertexDat) * nuroVertCnt, verts[t].data());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
     inline const auto &GetVerts() const { return verts; }
     inline const auto GetVAO() const { return VAO; }
     inline const auto GetSelectedVAO() const { return slctVAO; }
     inline const auto GetSelectedVertCnt() const { return inliers.size(); }
-    inline const auto GetSelctingFrameVAO() const { return slctFrameVAO; }
     inline const auto GetCurveVAO() const { return curveVAO; }
+    inline const auto GetPosRange() const {
+        return std::make_tuple(minPos, maxPos);
+    }
 
   private:
     void assignRawDatToVerts() {
@@ -276,7 +280,7 @@ class WormNeuronPositionData {
         verts.resize(timeCnt);
         verts.front().clear();
         for (const auto &pos : rawDat)
-            verts.front().emplace_back(scale * (pos + offset));
+            verts.front().emplace_back(pos);
         for (size_t t = 1; t < timeCnt; ++t)
             verts[t] = verts.front();
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -302,6 +306,114 @@ class WormNeuronPositionData {
         }
         auto QR = A.householderQr();
         return QR.solve(b);
+    }
+    void registerWithWPD() {
+        std::vector<GLfloat> curveLens;
+        curveLens.reserve(curve.size());
+        curveLens.emplace_back(0);
+        for (size_t idx = 1; idx < curve.size(); ++idx)
+            curveLens.emplace_back(
+                curveLens[idx - 1] +
+                glm::distance(curve[idx - 1].pos, curve[idx].pos));
+
+        GLfloat avgCurveDltLen = 0;
+        std::vector<std::tuple<GLfloat, size_t>> lenAndCurveIndices;
+        lenAndCurveIndices.reserve(rawDat.size());
+        for (auto &pos : rawDat) {
+            auto [curveIdx, dist] = [&]() {
+                GLfloat dist = std::numeric_limits<GLfloat>::max();
+                size_t idx = 0;
+                for (size_t cIdx = 0; cIdx < curve.size(); ++cIdx) {
+                    auto currDist = glm::distance(curve[cIdx].pos, pos);
+                    if (currDist < dist) {
+                        idx = cIdx;
+                        dist = currDist;
+                    }
+                }
+                return std::make_pair(idx, dist);
+            }();
+            lenAndCurveIndices.emplace_back(curveLens[curveIdx], curveIdx);
+            avgCurveDltLen += dist;
+        }
+        avgCurveDltLen /= rawDat.size();
+
+        std::vector<GLfloat> vertsTLens;
+        std::map<GLfloat, size_t> vertsTLenToIndices;
+        size_t timeCnt = wpd->GetVerts().size();
+        for (size_t timeStep = 0; timeStep < timeCnt; ++timeStep) {
+            auto &wpdVertsT = wpd->GetVerts()[timeStep];
+            auto &vertsT = verts[timeStep];
+
+            vertsTLens.clear();
+            vertsTLens.reserve(wpdVertsT.size());
+            vertsTLens.emplace_back(0);
+            GLfloat avgVertsDltLen = glm::length(wpdVertsT[0].delta);
+            for (size_t idx = 1; idx < wpdVertsT.size(); ++idx) {
+                vertsTLens.emplace_back(
+                    vertsTLens[idx - 1] +
+                    glm::distance(wpdVertsT[idx - 1].cntrPos,
+                                  wpdVertsT[idx].cntrPos));
+                avgVertsDltLen += glm::length(wpdVertsT[idx].delta);
+            }
+            avgVertsDltLen /= wpdVertsT.size();
+            auto dltScale = .3f * avgVertsDltLen / avgCurveDltLen;
+            auto lenScale = vertsTLens.back() / curveLens.back();
+
+            vertsTLenToIndices.clear();
+            for (size_t idx = 0; idx < wpdVertsT.size(); ++idx)
+                vertsTLenToIndices[vertsTLens[idx]] = idx;
+
+            for (size_t vIdx = 0; vIdx < rawDat.size(); ++vIdx) {
+                auto [len, curveIdx] = lenAndCurveIndices[vIdx];
+                auto scaledLen = lenScale * len;
+                auto right = vertsTLenToIndices.lower_bound(scaledLen);
+                if (right == vertsTLenToIndices.end())
+                    --right;
+
+                auto cntrPos = [&]() {
+                    auto lenDltRat = (scaledLen - right->first) /
+                                     (right->second == 0
+                                          ? vertsTLens[1] - vertsTLens[0]
+                                          : vertsTLens[right->second] -
+                                                vertsTLens[right->second - 1]);
+                    auto lenDlt =
+                        right->second == 0
+                            ? wpdVertsT[1].cntrPos - wpdVertsT[0].cntrPos
+                            : wpdVertsT[right->second].cntrPos -
+                                  wpdVertsT[right->second - 1].cntrPos;
+                    return wpdVertsT[right->second].cntrPos +
+                           lenDltRat * lenDlt;
+                }();
+                auto rotMat = [&](size_t curveIdx) {
+                    auto curveLenDrc =
+                        curveIdx == 0 ? curve[1].pos - curve[0].pos
+                        : curveIdx == curve.size() - 1
+                            ? curve[curveIdx].pos - curve[curveIdx - 1].pos
+                            : curve[curveIdx + 1].pos - curve[curveIdx - 1].pos;
+                    auto vertsT0LenDrc =
+                        right->second == 0
+                            ? wpdVertsT[1].cntrPos - wpdVertsT[0].cntrPos
+                        : right->second == wpdVertsT.size() - 1
+                            ? wpdVertsT[right->second].cntrPos -
+                                  wpdVertsT[right->second - 1].cntrPos
+                            : wpdVertsT[right->second + 1].cntrPos -
+                                  wpdVertsT[right->second - 1].cntrPos;
+                    auto cos = glm::dot(curveLenDrc, vertsT0LenDrc) /
+                               glm::length(curveLenDrc) /
+                               glm::length(vertsT0LenDrc);
+                    auto sin = sqrtf(1 - cos * cos);
+                    return (curveLenDrc.x * vertsT0LenDrc.y -
+                            vertsT0LenDrc.x * curveLenDrc.y) > 0
+                               ? glm::mat3{cos, -sin, 0, +sin, cos,
+                                           0,   0,    0, 1.f}
+                               : glm::mat3{cos, +sin, 0, -sin, cos,
+                                           0,   0,    0, 1.f};
+                }(curveIdx);
+                vertsT[vIdx] =
+                    cntrPos +
+                    dltScale * rotMat * (rawDat[vIdx] - curve[curveIdx].pos);
+            }
+        }
     }
 };
 } // namespace kouek
