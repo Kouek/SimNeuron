@@ -33,7 +33,8 @@ class GLView : public QOpenGLWidget {
         this->renderer = renderer;
     }
 
-  signals:
+signals:
+    void GLInited();
     void GLResized(int w, int h);
     void KeyPressed(int key, int funcKey = -1);
     void MousePressed(const glm::vec2 &normPos);
@@ -46,6 +47,8 @@ class GLView : public QOpenGLWidget {
         assert(hasInit);
 
         glClearColor(0.f, 0.f, 0.f, 1.f);
+
+        emit GLInited();
     }
     void resizeGL(int w, int h) override { emit GLResized(w, h); }
     void paintGL() override {

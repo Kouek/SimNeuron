@@ -35,7 +35,7 @@ class MainWindow : public QWidget {
     std::shared_ptr<WormRenderer> renderer;
 
     bool isSelectingInliers = false;
-    float fov = 60.f;
+    float fov = 90.f;
     glm::mat3 wnpdModelRevRot;
     glm::mat4 proj, unProj, wnpdModelRev;
     std::array<glm::vec2, 2> inliersSelectFrame;
@@ -47,12 +47,14 @@ class MainWindow : public QWidget {
           camera(glm::vec3{0, 0, 1.f}, glm::zero<glm::vec3>()) {
         ui->setupUi(this);
 
-        glView = new GLView();
         ui->groupBoxView->setLayout(new QVBoxLayout);
+        glView = new GLView();
         ui->groupBoxView->layout()->addWidget(glView);
 
-        ui->groupBoxReg->setEnabled(false);
         ui->groupBoxWNPD->setEnabled(false);
+        ui->groupBoxReg->setEnabled(false);
+        ui->groupBoxRendering->setEnabled(false);
+        ui->groupBoxTimeStep->setEnabled(false);
         ui->groupBoxLighting->setEnabled(false);
 
         // slots
@@ -66,29 +68,23 @@ class MainWindow : public QWidget {
                 wpd = std::make_shared<WormPositionData>(path.toStdString());
 
                 wnpd.reset();
-                ui->groupBoxWNPD->setEnabled(false);
-                ui->groupBoxReg->setEnabled(false);
                 ui->labelWPDPath->setText(path);
                 ui->horizontalSliderTiemStep->setMaximum(
                     wpd->GetVerts().size() - 1);
                 ui->labelMinTimeStep->setText(QString::number(0));
                 ui->labelMaxTimeStep->setText(
                     QString::number(wpd->GetVerts().size() - 1));
+
                 ui->groupBoxWNPD->setEnabled(true);
+                ui->groupBoxReg->setEnabled(false);
+                ui->groupBoxRendering->setEnabled(true);
+                ui->groupBoxTimeStep->setEnabled(true);
                 ui->groupBoxLighting->setEnabled(true);
 
-                if (!renderer) {
-                    renderer = std::make_shared<WormRenderer>();
-                    renderer->SetDivisionNum(16);
-                    syncFromLightParam();
-                    glView->SetRenderer(renderer);
-                }
-
-                // cascading slots
-                glView->GLResized(glView->width(), glView->height());
-                
                 renderer->SetWormPositionDat(wpd);
                 renderer->SetRenderTarget(WormRenderer::RenderTarget::Worm);
+
+                glView->GLResized(glView->width(), glView->height());
                 glView->update();
             } catch (std::exception &e) {
                 ui->labelWPDPath->setText(e.what());
@@ -114,38 +110,53 @@ class MainWindow : public QWidget {
                     wnpdModelRev = glm::inverse(M);
                     wnpdModelRevRot = wnpdModelRev;
                 }
+                renderer->SetWormNeuronPositionDat(wnpd);
+                renderer->SetRenderTarget(
+                    WormRenderer::RenderTarget::NeuronReg);
+                static constexpr auto NURO_HF_WID = .01f;
+                renderer->SetNeuronHalfWidth(NURO_HF_WID);
+
+                syncFromWormComponents();
 
                 ui->labelWNPDPath->setText(path);
                 ui->groupBoxReg->setEnabled(true);
-                ui->groupBoxLighting->setEnabled(false);
+                ui->tabWidgetReg->setCurrentIndex(0); // Neuron Registration tab
                 ui->comboBoxSceneMode->setCurrentIndex(
                     static_cast<int>(WormRenderer::SceneMode::Full));
-                ui->comboBoxSceneMode->setEnabled(false);
+                ui->doubleSpinBoxNuroHfWid->setValue(NURO_HF_WID);
+                ui->groupBoxRendering->setEnabled(false);
+                ui->groupBoxTimeStep->setEnabled(false);
+                ui->groupBoxLighting->setEnabled(false);
 
-                // cascading slots
-                ui->doubleSpinBoxNuroHfWid->valueChanged(
-                    ui->doubleSpinBoxNuroHfWid->value());
-
-                renderer->SetWormNeuronPositionDat(wnpd);
-                renderer->SetRenderTarget(WormRenderer::RenderTarget::Neuron);
                 glView->update();
             } catch (std::exception &e) {
                 ui->labelWNPDPath->setText(e.what());
             }
         });
+        connect(ui->tabWidgetReg, &QTabWidget::currentChanged, [&](int idx) {
+            if (idx == 0)
+                renderer->SetRenderTarget(
+                    WormRenderer::RenderTarget::NeuronReg);
+            else
+                renderer->SetRenderTarget(WormRenderer::RenderTarget::WormReg);
+            glView->update();
+        });
         connect(
             ui->pushButtonSlctInlierOrFitCurve, &QPushButton::clicked, [&]() {
                 if (renderer->GetRenderTarget() !=
-                    WormRenderer::RenderTarget::Neuron)
+                    WormRenderer::RenderTarget::NeuronReg)
                     return;
                 isSelectingInliers = !isSelectingInliers;
                 static constexpr char *SELECT_INLIERS_TXT = "Select Inliers";
                 static constexpr char *POLY_FIT_CURVE_TXT = "Poly Fit Curve";
 
                 glView->makeCurrent();
-                if (isSelectingInliers)
+                if (isSelectingInliers) {
                     ui->pushButtonSlctInlierOrFitCurve->setText(
                         POLY_FIT_CURVE_TXT);
+                    wnpd->ClearCurve();
+                    wnpd->UnselectInliers();
+                }
                 else {
                     ui->pushButtonSlctInlierOrFitCurve->setText(
                         SELECT_INLIERS_TXT);
@@ -153,31 +164,79 @@ class MainWindow : public QWidget {
                     static constexpr std::array<glm::vec2, 2> zeroes{
                         glm::zero<glm::vec2>()};
                     renderer->SetFrameVerts(zeroes);
-                    wnpd->UnselectInliers();
                 }
                 glView->update();
             });
+        connect(ui->doubleSpinBoxHeadStart,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxHeadEnd,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxVCStart,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxVCEnd,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxTailStart,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxTailEnd,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    glView->makeCurrent();
+                    syncFromWormComponents();
+                    glView->update();
+                });
         connect(ui->pushButtonReg, &QPushButton::clicked, [&]() {
+            ui->groupBoxReg->setEnabled(false);
+            ui->groupBoxRendering->setEnabled(true);
+            ui->groupBoxTimeStep->setEnabled(true);
+            ui->groupBoxLighting->setEnabled(true);
+
             glView->makeCurrent();
             wnpd->RegisterWithWPD();
             renderer->SetRenderTarget(
                 WormRenderer::RenderTarget::WormAndNeuron);
             glView->update();
-
-            ui->comboBoxSceneMode->setEnabled(true);
-            ui->groupBoxReg->setEnabled(false);
-            ui->groupBoxLighting->setEnabled(true);
         });
+        connect(ui->radioButtonViewWireFrame, &QRadioButton::clicked,
+                [&](bool checked) {
+                    renderer->SetDrawWireFrame(checked);
+                    glView->update();
+                });
+        connect(ui->doubleSpinBoxFrontFaceOpacity,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                [&](double val) {
+                    renderer->SetFrontFaceOpacity(val);
+                    glView->update();
+                });
         connect(ui->doubleSpinBoxNuroHfWid,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 [&](double val) {
                     glView->makeCurrent();
                     renderer->SetNeuronHalfWidth(val);
-                    glView->update();
-                });
-        connect(ui->radioButtonViewWireFrame, &QRadioButton::clicked,
-                [&](bool checked) {
-                    renderer->SetDrawWireFrame(checked);
                     glView->update();
                 });
         connect(ui->comboBoxSceneMode,
@@ -251,9 +310,15 @@ class MainWindow : public QWidget {
                     renderer->SetLightParam(param);
                     glView->update();
                 });
+        connect(glView, &GLView::GLInited, [&]() {
+            // no need to call makeCurrent()
+            renderer = std::make_shared<WormRenderer>();
+            renderer->SetDivisionNum(16);
+            syncFromRenderPamram();
+            syncFromLightParam();
+            glView->SetRenderer(renderer);
+        });
         connect(glView, &GLView::GLResized, [&](int w, int h) {
-            if (!renderer)
-                return;
             proj = glm::perspectiveFov(glm::radians(fov), (float)w, (float)h,
                                        N_CLIP, F_CLIP);
             unProj = Math::inverseProjective(proj);
@@ -362,15 +427,44 @@ class MainWindow : public QWidget {
     }
 
   private:
+    inline void syncFromRenderPamram() {
+        ui->radioButtonViewWireFrame->clicked(
+            ui->radioButtonViewWireFrame->isChecked());
+        ui->doubleSpinBoxFrontFaceOpacity->valueChanged(
+            ui->doubleSpinBoxFrontFaceOpacity->value());
+        ui->doubleSpinBoxNuroHfWid->valueChanged(
+            ui->doubleSpinBoxNuroHfWid->value());
+        ui->comboBoxSceneMode->setCurrentIndex(
+            ui->comboBoxSceneMode->currentIndex());
+    }
     inline void syncFromLightParam() {
-        ui->doubleSpinBoxAmbientStrength->valueChanged(
-            ui->doubleSpinBoxAmbientStrength->value());
-        ui->doubleSpinBoxLightR->valueChanged(ui->doubleSpinBoxLightR->value());
-        ui->doubleSpinBoxLightG->valueChanged(ui->doubleSpinBoxLightG->value());
-        ui->doubleSpinBoxLightB->valueChanged(ui->doubleSpinBoxLightB->value());
-        ui->doubleSpinBoxLightX->valueChanged(ui->doubleSpinBoxLightX->value());
-        ui->doubleSpinBoxLightY->valueChanged(ui->doubleSpinBoxLightY->value());
-        ui->doubleSpinBoxLightZ->valueChanged(ui->doubleSpinBoxLightZ->value());
+        std::array arrs{
+            ui->doubleSpinBoxAmbientStrength, ui->doubleSpinBoxLightR,
+            ui->doubleSpinBoxLightG,          ui->doubleSpinBoxLightB,
+            ui->doubleSpinBoxLightX,          ui->doubleSpinBoxLightY,
+            ui->doubleSpinBoxLightZ};
+        for (auto ptr : arrs)
+            ptr->valueChanged(ptr->value());
+    }
+    inline void syncFromWormComponents() {
+        std::array arrs{ui->doubleSpinBoxHeadStart, ui->doubleSpinBoxHeadEnd,
+                        ui->doubleSpinBoxVCStart,   ui->doubleSpinBoxVCEnd,
+                        ui->doubleSpinBoxTailStart, ui->doubleSpinBoxTailEnd};
+        for (uint8_t idx = 1; idx < arrs.size(); ++idx) {
+            auto lft = arrs[idx - 1]->value();
+            auto rht = arrs[idx]->value();
+            if (lft > rht)
+                arrs[idx]->setValue(lft);
+        }
+        wpd->SetComponentRatio(WormPositionData::Component::Head,
+                               ui->doubleSpinBoxHeadStart->value(),
+                               ui->doubleSpinBoxHeadEnd->value());
+        wpd->SetComponentRatio(WormPositionData::Component::VentralCord,
+                               ui->doubleSpinBoxVCStart->value(),
+                               ui->doubleSpinBoxVCEnd->value());
+        wpd->SetComponentRatio(WormPositionData::Component::Tail,
+                               ui->doubleSpinBoxTailStart->value(),
+                               ui->doubleSpinBoxTailEnd->value());
     }
 };
 } // namespace kouek
