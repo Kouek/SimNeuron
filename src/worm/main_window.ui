@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1200</width>
-    <height>1016</height>
+    <height>1032</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -526,7 +526,7 @@ QGroupBox::title {
                 <number>10</number>
                </property>
                <property name="value">
-                <number>6</number>
+                <number>8</number>
                </property>
               </widget>
              </item>
@@ -569,6 +569,9 @@ QGroupBox::title {
                <property name="singleStep">
                 <double>0.100000000000000</double>
                </property>
+               <property name="value">
+                <double>1.000000000000000</double>
+               </property>
               </widget>
              </item>
              <item row="1" column="3">
@@ -578,6 +581,9 @@ QGroupBox::title {
                </property>
                <property name="singleStep">
                 <double>0.100000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.900000000000000</double>
                </property>
               </widget>
              </item>
@@ -599,6 +605,9 @@ QGroupBox::title {
                <property name="singleStep">
                 <double>0.100000000000000</double>
                </property>
+               <property name="value">
+                <double>0.150000000000000</double>
+               </property>
               </widget>
              </item>
              <item row="1" column="1">
@@ -609,6 +618,9 @@ QGroupBox::title {
                <property name="singleStep">
                 <double>0.100000000000000</double>
                </property>
+               <property name="value">
+                <double>0.180000000000000</double>
+               </property>
               </widget>
              </item>
              <item row="0" column="1">
@@ -618,6 +630,9 @@ QGroupBox::title {
                </property>
                <property name="singleStep">
                 <double>0.100000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.030000000000000</double>
                </property>
               </widget>
              </item>
@@ -638,6 +653,9 @@ QGroupBox::title {
                </property>
                <property name="singleStep">
                 <double>0.100000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.900000000000000</double>
                </property>
               </widget>
              </item>
@@ -778,7 +796,7 @@ border-color: #04b97f;</string>
             <double>0.100000000000000</double>
            </property>
            <property name="value">
-            <double>0.200000000000000</double>
+            <double>0.350000000000000</double>
            </property>
           </widget>
          </item>
@@ -1030,7 +1048,7 @@ border-color: #04b97f;</string>
             <double>0.100000000000000</double>
            </property>
            <property name="value">
-            <double>0.500000000000000</double>
+            <double>0.000000000000000</double>
            </property>
           </widget>
          </item>

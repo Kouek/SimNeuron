@@ -124,9 +124,7 @@ class MainWindow : public QWidget {
                 ui->comboBoxSceneMode->setCurrentIndex(
                     static_cast<int>(WormRenderer::SceneMode::Full));
                 ui->doubleSpinBoxNuroHfWid->setValue(NURO_HF_WID);
-                ui->groupBoxRendering->setEnabled(false);
                 ui->groupBoxTimeStep->setEnabled(false);
-                ui->groupBoxLighting->setEnabled(false);
 
                 glView->update();
             } catch (std::exception &e) {
@@ -211,9 +209,7 @@ class MainWindow : public QWidget {
                 });
         connect(ui->pushButtonReg, &QPushButton::clicked, [&]() {
             ui->groupBoxReg->setEnabled(false);
-            ui->groupBoxRendering->setEnabled(true);
             ui->groupBoxTimeStep->setEnabled(true);
-            ui->groupBoxLighting->setEnabled(true);
 
             glView->makeCurrent();
             wnpd->RegisterWithWPD();
@@ -235,7 +231,6 @@ class MainWindow : public QWidget {
         connect(ui->doubleSpinBoxNuroHfWid,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 [&](double val) {
-                    glView->makeCurrent();
                     renderer->SetNeuronHalfWidth(val);
                     glView->update();
                 });

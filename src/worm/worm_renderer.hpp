@@ -48,8 +48,8 @@ class WormRenderer {
     GLuint frameVAO, frameVBO, frameEBO;
     size_t wormVertCnt, nuroVertCnt, curveVertCnt;
     size_t timeStep = 0;
-    GLfloat frontFaceOpacity = 1.f;
-    GLfloat backgroundZ, minScaleThroughT;
+    GLfloat nuroHfWid = .01f, frontFaceOpacity = 1.f;
+    GLfloat backgroundZ, minScaleThroughT, avgScaleThroughT;
     glm::mat4 view, proj;
     LightParam lightParam;
     SceneMode sceneMode = SceneMode::Full;
@@ -184,13 +184,15 @@ class WormRenderer {
             backgroundZ *= -2.f;
         }
         minScaleThroughT = 1.f;
-        for (size_t timeStep = 0; timeStep < wpd->GetVerts().size();
-             ++timeStep) {
+        avgScaleThroughT = 0;
+        auto timeCnt = wpd->GetVerts().size();
+        for (size_t timeStep = 0; timeStep < timeCnt; ++timeStep) {
             auto [min, max] = wpd->GetPosRangeOf(timeStep);
             glm::vec2 delta = max - min;
             auto scale = 2.f / std::max({delta.x, delta.y});
             if (minScaleThroughT > scale)
                 minScaleThroughT = scale;
+            avgScaleThroughT += scale / (float)timeCnt;
         }
     }
     void SetWormNeuronPositionDat(std::shared_ptr<WormNeuronPositionData> dat) {
@@ -214,20 +216,20 @@ class WormRenderer {
     }
     const auto &GetLightParam() const { return lightParam; }
     void Render() {
-        static constexpr glm::vec3 BKGRND_COLOR{.5f, 1.f, .5f};
-        static constexpr glm::vec3 WORM_BACK_COLOR{.8f, .6f, .1f};
-        static constexpr glm::vec3 WORM_FRONT_COLOR{.4f, .6f, .8f};
+        static constexpr glm::vec3 BKGRND_COLOR{.1f, .1f, .1f};
+        static constexpr glm::vec3 WORM_BACK_COLOR{.4f, .6f, .1f};
+        static constexpr glm::vec3 WORM_FRONT_COLOR{.1f, .4f, .6f};
         static constexpr glm::vec3 NURO_COLOR{.4f, .8f, 1.f};
         static constexpr glm::vec3 SLCT_COLOR{1.f, .1f, .3f};
         static constexpr std::array<glm::vec3, 3> CMP_COLORS{
             glm::vec3{1.f, 0, 0}, glm::vec3{0, .5f, 1.f}, glm::vec3{0, 1.f, 0}};
 
         if (divNumChanged) {
+            std::vector<GLfloat> vals(divNum);
+
             wormShader->use();
             glUniform1ui(glGetUniformLocation(wormShader->ID, "divNum"),
                          (GLuint)divNum);
-
-            std::vector<GLfloat> vals(divNum);
             for (uint8_t idx = 0; idx < divNum; ++idx)
                 vals[idx] = cosf(glm::pi<float>() * 2.f * idx / divNum);
             glUniform1fv(glGetUniformLocation(wormShader->ID, "coss"), divNum,
@@ -236,6 +238,20 @@ class WormRenderer {
                 vals[idx] = sinf(glm::pi<float>() * 2.f * idx / divNum);
             glUniform1fv(glGetUniformLocation(wormShader->ID, "sins"), divNum,
                          vals.data());
+
+            auto nuroDivNum = 12;
+            vals.resize(nuroDivNum);
+            nuroShader->use();
+            glUniform1ui(glGetUniformLocation(nuroShader->ID, "divNum"),
+                         (GLuint)nuroDivNum);
+            for (uint8_t idx = 0; idx < nuroDivNum; ++idx)
+                vals[idx] = cosf(glm::pi<float>() * 2.f * idx / nuroDivNum);
+            glUniform1fv(glGetUniformLocation(nuroShader->ID, "coss"),
+                         nuroDivNum, vals.data());
+            for (uint8_t idx = 0; idx < nuroDivNum; ++idx)
+                vals[idx] = sinf(glm::pi<float>() * 2.f * idx / nuroDivNum);
+            glUniform1fv(glGetUniformLocation(nuroShader->ID, "sins"),
+                         nuroDivNum, vals.data());
 
             divNumChanged = false;
         }
@@ -313,9 +329,8 @@ class WormRenderer {
                        renderTarget != RenderTarget::NeuronReg && wpd) {
                 auto [min, max] = wpd->GetPosRangeOf(timeStep);
                 glm::vec3 offset{-.5f * (max + min), 0};
-                glm::vec2 delta = max - min;
-                glm::vec3 scale{2.f / std::max({delta.x, delta.y})};
-                auto M = glm::scale(glm::identity<glm::mat4>(), scale) *
+                auto M = glm::scale(glm::identity<glm::mat4>(),
+                                    glm::vec3{avgScaleThroughT}) *
                          glm::translate(glm::identity<glm::mat4>(), offset);
                 wormShader->use();
                 wormShader->setMat4("M", M);
@@ -342,11 +357,11 @@ class WormRenderer {
             wormShader->setFloat("ambientStrength", lightParam.ambientStrength);
             wormShader->setVec3("lightColor", lightParam.lightColor);
             wormShader->setVec3("lightPos", lightParam.lightPos);
-            bkgrndShader->use();
-            bkgrndShader->setFloat("ambientStrength",
-                                   lightParam.ambientStrength);
-            bkgrndShader->setVec3("lightColor", lightParam.lightColor);
-            bkgrndShader->setVec3("lightPos", lightParam.lightPos);
+
+            nuroShader->use();
+            nuroShader->setFloat("ambientStrength", lightParam.ambientStrength);
+            nuroShader->setVec3("lightColor", lightParam.lightColor);
+            nuroShader->setVec3("lightPos", lightParam.lightPos);
 
             lightChanged = false;
         }
@@ -396,17 +411,26 @@ class WormRenderer {
             if (!wnpd)
                 break;
 
+            glEnable(GL_DEPTH_TEST);
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+
             nuroShader->use();
             nuroShader->setVec3("color", NURO_COLOR);
+            nuroShader->setFloat("halfWid", nuroHfWid);
             glBindVertexArray(wnpd->GetVAO());
             glDrawArrays(GL_POINTS, timeStep * nuroVertCnt, nuroVertCnt);
 
             nuroShader->setVec3("color", SLCT_COLOR);
+            nuroShader->setFloat("halfWid", nuroHfWid * 1.1f);
             glBindVertexArray(wnpd->GetInliersVAO());
             glDrawElements(GL_POINTS, wnpd->GetInliersVertCnt(),
                            GL_UNSIGNED_INT, 0);
 
+            glDisable(GL_DEPTH_TEST);
+
             nuroShader->setVec3("color", glm::vec3{.3f, 1.f, .1f});
+            nuroShader->setFloat("halfWid", nuroHfWid * 1.2f);
             glBindVertexArray(wnpd->GetCurveVAO());
             glDrawArrays(GL_POINTS, 0, wnpd->GetCurveVertCnt());
 
@@ -416,6 +440,7 @@ class WormRenderer {
             glDrawElements(GL_LINE_STRIP, 5, GL_UNSIGNED_BYTE, 0);
 
             glBindVertexArray(0);
+            glDisable(GL_CULL_FACE);
             break;
         case RenderTarget::WormReg:
             if (!wpd)
@@ -462,6 +487,7 @@ class WormRenderer {
 
             nuroShader->use();
             nuroShader->setVec3("color", NURO_COLOR);
+            nuroShader->setFloat("halfWid", nuroHfWid);
             glBindVertexArray(wnpd->GetVAO());
             glDrawArrays(GL_POINTS, timeStep * nuroVertCnt, nuroVertCnt);
 
@@ -504,10 +530,7 @@ class WormRenderer {
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(glm::vec3) * 4, pos4.data());
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
-    void SetNeuronHalfWidth(float hfWid) {
-        nuroShader->use();
-        nuroShader->setFloat("halfWid", hfWid);
-    }
+    void SetNeuronHalfWidth(float hfWid) { nuroHfWid = hfWid; }
     void SetFrontFaceOpacity(float opacity) { frontFaceOpacity = opacity; }
 };
 
