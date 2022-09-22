@@ -35,6 +35,7 @@ class MainWindow : public QWidget {
     std::shared_ptr<WormRenderer> renderer;
 
     bool isSelectingInliers = false;
+    WormPositionData::Component selectedComponent;
     float fov = 90.f;
     glm::mat3 wnpdModelRevRot;
     glm::mat4 proj, unProj, wnpdModelRev;
@@ -139,32 +140,55 @@ class MainWindow : public QWidget {
                 renderer->SetRenderTarget(WormRenderer::RenderTarget::WormReg);
             glView->update();
         });
-        connect(
-            ui->pushButtonSlctInlierOrFitCurve, &QPushButton::clicked, [&]() {
-                if (renderer->GetRenderTarget() !=
-                    WormRenderer::RenderTarget::NeuronReg)
-                    return;
-                isSelectingInliers = !isSelectingInliers;
-                static constexpr char *SELECT_INLIERS_TXT = "Select Inliers";
-                static constexpr char *POLY_FIT_CURVE_TXT = "Poly Fit Curve";
+        connect(ui->pushButtonSlctHead, &QPushButton::clicked, [&](){
+            isSelectingInliers = true;
+            selectedComponent = WormPositionData::Component::Head;
+            ui->pushButtonSlctVC->setEnabled(false);
+            ui->pushButtonSlctTail->setEnabled(false);
+            ui->pushButtonPolyFitCurve->setEnabled(true);
 
-                glView->makeCurrent();
-                if (isSelectingInliers) {
-                    ui->pushButtonSlctInlierOrFitCurve->setText(
-                        POLY_FIT_CURVE_TXT);
-                    wnpd->ClearCurve();
-                    wnpd->UnselectInliers();
-                }
-                else {
-                    ui->pushButtonSlctInlierOrFitCurve->setText(
-                        SELECT_INLIERS_TXT);
-                    wnpd->PolyCurveFitWith(ui->spinBoxCurveFitOrder->value());
-                    static constexpr std::array<glm::vec2, 2> zeroes{
-                        glm::zero<glm::vec2>()};
-                    renderer->SetFrameVerts(zeroes);
-                }
-                glView->update();
+            glView->makeCurrent();
+            wnpd->UnselectComponent(selectedComponent);
+            wnpd->ClearCurve();
+            glView->update();
             });
+        connect(ui->pushButtonSlctVC, &QPushButton::clicked, [&]() {
+            isSelectingInliers = true;
+            selectedComponent = WormPositionData::Component::VentralCord;
+            ui->pushButtonSlctHead->setEnabled(false);
+            ui->pushButtonSlctTail->setEnabled(false);
+            ui->pushButtonPolyFitCurve->setEnabled(true);
+
+            glView->makeCurrent();
+            wnpd->UnselectComponent(selectedComponent);
+            wnpd->ClearCurve();
+            glView->update();
+        });
+        connect(ui->pushButtonSlctTail, &QPushButton::clicked, [&]() {
+            isSelectingInliers = true;
+            selectedComponent = WormPositionData::Component::Tail;
+            ui->pushButtonSlctHead->setEnabled(false);
+            ui->pushButtonSlctVC->setEnabled(false);
+            ui->pushButtonPolyFitCurve->setEnabled(true);
+
+            glView->makeCurrent();
+            wnpd->UnselectComponent(selectedComponent);
+            wnpd->ClearCurve();
+            glView->update();
+        });
+        connect(ui->pushButtonPolyFitCurve, &QPushButton::clicked, [&]() {
+            isSelectingInliers = false;
+            ui->pushButtonSlctHead->setEnabled(true);
+            ui->pushButtonSlctVC->setEnabled(true);
+            ui->pushButtonSlctTail->setEnabled(true);
+            ui->pushButtonPolyFitCurve->setEnabled(false);
+
+            glView->makeCurrent();
+            wnpd->PolyCurveFitWith(ui->spinBoxCurveFitOrder->value());
+            static constexpr std::array<glm::vec2, 2> ZEROES = {glm::vec2{0}};
+            renderer->SetFrameVerts(ZEROES);
+            glView->update();
+        });
         connect(ui->doubleSpinBoxHeadStart,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 [&](double val) {
@@ -416,7 +440,7 @@ class MainWindow : public QWidget {
             }
             Frustum frustum(newP, newF, N_CLIP, F_CLIP, drcs[0], drcs[2],
                             drcs[1], drcs[3]);
-            wnpd->SelectAndAppendInliers(frustum);
+            wnpd->SelectAndAppendComponentInliers(selectedComponent, frustum);
             glView->update();
         });
     }

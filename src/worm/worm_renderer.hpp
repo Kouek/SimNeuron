@@ -11,6 +11,8 @@
 #include "worm_data.hpp"
 #include "worm_neuron_data.hpp"
 
+#include "image_read.h"
+
 #define GL_CHECK                                                               \
     {                                                                          \
         GLenum gl_err;                                                         \
@@ -44,7 +46,7 @@ class WormRenderer {
          renderTargetChanged = true;
     bool drawWireFrame = false;
     uint8_t divNum;
-    GLuint backgroundVAO, backgroundVBO, backgroundEBO;
+    GLuint backgroundVAO, backgroundVBO, backgroundEBO, backgroundTex;
     GLuint frameVAO, frameVBO, frameEBO;
     size_t wormVertCnt, nuroVertCnt, curveVertCnt;
     size_t timeStep = 0;
@@ -66,13 +68,20 @@ class WormRenderer {
         glBindVertexArray(backgroundVAO);
         glBindBuffer(GL_ARRAY_BUFFER, backgroundVBO);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2),
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec4),
                               (const void *)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec4),
+                              (const void *)sizeof(glm::vec2));
         {
-            std::array<glm::vec2, 4> verts{
-                glm::vec2{-1.f, -1.f}, glm::vec2{+1.f, -1.f},
-                glm::vec2{-1.f, +1.f}, glm::vec2{+1.f, +1.f}};
-            glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec2) * verts.size(),
+            std::array verts{glm::vec4{-1.f, -1.f, +0.f, +0.f},
+                             glm::vec4{+1.f, -1.f, +1.f, +0.f},
+                             glm::vec4{-1.f, +1.f, +0.f, +1.f},
+                             glm::vec4{+1.f, +1.f, +1.f, +1.f}};
+            for (auto &v : verts)
+                for (uint8_t xy = 0; xy < 2; ++xy)
+                    v[xy] *= 1.5f;
+            glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * verts.size(),
                          verts.data(), GL_STATIC_DRAW);
         }
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, backgroundEBO);
@@ -82,6 +91,22 @@ class WormRenderer {
                          sizeof(GLubyte) * indices.size(), indices.data(),
                          GL_STATIC_DRAW);
         }
+        glGenTextures(1, &backgroundTex);
+        glBindTexture(GL_TEXTURE_2D, backgroundTex);
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            auto [dat, width, height, nrChannels] = ReadImageToRaw(
+                std::string(PROJECT_SOURCE_DIR) + "/data/ChessBoard.jpg");
+            assert(dat != nullptr);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+                         GL_UNSIGNED_BYTE, dat);
+            glGenerateMipmap(GL_TEXTURE_2D);
+            FreeRaw(dat);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
 
         glGenBuffers(1, &frameVBO);
         glGenBuffers(1, &frameEBO);
@@ -216,13 +241,12 @@ class WormRenderer {
     }
     const auto &GetLightParam() const { return lightParam; }
     void Render() {
-        static constexpr glm::vec3 BKGRND_COLOR{.1f, .1f, .1f};
         static constexpr glm::vec3 WORM_BACK_COLOR{.4f, .6f, .1f};
-        static constexpr glm::vec3 WORM_FRONT_COLOR{.1f, .4f, .6f};
+        static constexpr glm::vec3 WORM_FRONT_COLOR{.6f, .6f, .4f};
         static constexpr glm::vec3 NURO_COLOR{.4f, .8f, 1.f};
         static constexpr glm::vec3 SLCT_COLOR{1.f, .1f, .3f};
         static constexpr std::array<glm::vec3, 3> CMP_COLORS{
-            glm::vec3{1.f, 0, 0}, glm::vec3{0, .5f, 1.f}, glm::vec3{0, 1.f, 0}};
+            glm::vec3{1.f, 0, 0}, glm::vec3{1.f, 0, 1.f}, glm::vec3{0, 1.f, 0}};
 
         if (divNumChanged) {
             std::vector<GLfloat> vals(divNum);
@@ -239,7 +263,7 @@ class WormRenderer {
             glUniform1fv(glGetUniformLocation(wormShader->ID, "sins"), divNum,
                          vals.data());
 
-            auto nuroDivNum = 12;
+            auto nuroDivNum = 12; // limited by geometry shader
             vals.resize(nuroDivNum);
             nuroShader->use();
             glUniform1ui(glGetUniformLocation(nuroShader->ID, "divNum"),
@@ -359,7 +383,9 @@ class WormRenderer {
             wormShader->setVec3("lightPos", lightParam.lightPos);
 
             nuroShader->use();
-            nuroShader->setFloat("ambientStrength", lightParam.ambientStrength);
+            nuroShader->setFloat(
+                "ambientStrength",
+                glm::clamp(lightParam.ambientStrength + .2f, 0.f, 1.f));
             nuroShader->setVec3("lightColor", lightParam.lightColor);
             nuroShader->setVec3("lightPos", lightParam.lightPos);
 
@@ -377,9 +403,10 @@ class WormRenderer {
             glCullFace(GL_BACK);
 
             bkgrndShader->use();
-            bkgrndShader->setVec3("color", BKGRND_COLOR);
+            glBindTexture(GL_TEXTURE_2D, backgroundTex);
             glBindVertexArray(backgroundVAO);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
 
             glCullFace(GL_FRONT);
 
@@ -407,7 +434,7 @@ class WormRenderer {
             glDisable(GL_CULL_FACE);
             glDisable(GL_BLEND);
             break;
-        case RenderTarget::NeuronReg:
+        case RenderTarget::NeuronReg: {
             if (!wnpd)
                 break;
 
@@ -421,15 +448,26 @@ class WormRenderer {
             glBindVertexArray(wnpd->GetVAO());
             glDrawArrays(GL_POINTS, timeStep * nuroVertCnt, nuroVertCnt);
 
-            nuroShader->setVec3("color", SLCT_COLOR);
+            std::array<size_t, 3> inliersCnt{
+                wnpd->GetComponentInliersVertCnt(
+                    WormPositionData::Component::Head),
+                wnpd->GetComponentInliersVertCnt(
+                    WormPositionData::Component::VentralCord),
+                wnpd->GetComponentInliersVertCnt(
+                    WormPositionData::Component::Tail)};
+            size_t offset = 0;
             nuroShader->setFloat("halfWid", nuroHfWid * 1.1f);
             glBindVertexArray(wnpd->GetInliersVAO());
-            glDrawElements(GL_POINTS, wnpd->GetInliersVertCnt(),
-                           GL_UNSIGNED_INT, 0);
+            for (uint8_t cmpIdx = 0; cmpIdx < 3; ++cmpIdx) {
+                nuroShader->setVec3("color", CMP_COLORS[cmpIdx]);
+                glDrawElements(GL_POINTS, inliersCnt[cmpIdx], GL_UNSIGNED_INT,
+                               (const void *)(sizeof(GLuint) * offset));
+                offset += inliersCnt[cmpIdx];
+            }
 
             glDisable(GL_DEPTH_TEST);
 
-            nuroShader->setVec3("color", glm::vec3{.3f, 1.f, .1f});
+            nuroShader->setVec3("color", SLCT_COLOR);
             nuroShader->setFloat("halfWid", nuroHfWid * 1.2f);
             glBindVertexArray(wnpd->GetCurveVAO());
             glDrawArrays(GL_POINTS, 0, wnpd->GetCurveVertCnt());
@@ -442,6 +480,7 @@ class WormRenderer {
             glBindVertexArray(0);
             glDisable(GL_CULL_FACE);
             break;
+        }
         case RenderTarget::WormReg:
             if (!wpd)
                 break;
@@ -450,9 +489,10 @@ class WormRenderer {
             glCullFace(GL_BACK);
 
             bkgrndShader->use();
-            bkgrndShader->setVec3("color", BKGRND_COLOR);
+            glBindTexture(GL_TEXTURE_2D, backgroundTex);
             glBindVertexArray(backgroundVAO);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
 
             wormShader->use();
             wormShader->setVec3("color", WORM_BACK_COLOR);
@@ -481,9 +521,10 @@ class WormRenderer {
             glCullFace(GL_BACK);
 
             bkgrndShader->use();
-            bkgrndShader->setVec3("color", BKGRND_COLOR);
+            glBindTexture(GL_TEXTURE_2D, backgroundTex);
             glBindVertexArray(backgroundVAO);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
 
             nuroShader->use();
             nuroShader->setVec3("color", NURO_COLOR);

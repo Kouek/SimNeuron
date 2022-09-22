@@ -94,17 +94,15 @@ class WormNeuronPositionData {
     GLuint inliersVAO, inliersEBO;
     GLuint curveVAO, curveVBO;
     size_t wormVertCnt;
-    bool inlierFrameDatChanged = true;
     glm::vec3 maxPos{-std::numeric_limits<GLfloat>::infinity()},
         minPos{std::numeric_limits<GLfloat>::infinity()};
-    glm::vec3 inliersMaxPos{-std::numeric_limits<GLfloat>::infinity()},
-        inliersMinPos{std::numeric_limits<GLfloat>::infinity()};
     std::string filePath;
 
     std::vector<glm::vec3> rawDat;
     std::vector<std::vector<glm::vec3>> verts;
     std::vector<glm::vec3> curve;
     std::unordered_set<size_t> inliers;
+    std::array<std::unordered_set<size_t>, 3> cmpInliers;
 
     std::shared_ptr<WormPositionData> wpd;
 
@@ -211,34 +209,30 @@ class WormNeuronPositionData {
 
         assignRawDatToVerts();
     }
-    void SelectAndAppendInliers(const Frustum &frustm) {
-        inlierFrameDatChanged = true;
-
-        for (size_t vIdx = 0; vIdx < verts.front().size(); ++vIdx)
-            if (frustm.IsIntersetcedWith(verts.front()[vIdx]))
-                inliers.emplace(vIdx);
-        std::vector<GLuint> plainInliers;
-        plainInliers.reserve(inliers.size());
-        for (auto id : inliers) {
-            plainInliers.emplace_back(id);
-            auto &pos = rawDat[id];
-            for (uint8_t xyz = 0; xyz < 3; ++xyz) {
-                if (pos[xyz] < inliersMinPos[xyz])
-                    inliersMinPos[xyz] = pos[xyz];
-                if (pos[xyz] > inliersMaxPos[xyz])
-                    inliersMaxPos[xyz] = pos[xyz];
+    void SelectAndAppendComponentInliers(WormPositionData::Component component,
+                                         const Frustum &frustm) {
+        auto cmpIdx = static_cast<uint8_t>(component);
+        for (size_t rdIdx = 0; rdIdx < rawDat.size(); ++rdIdx)
+            if (frustm.IsIntersetcedWith(rawDat[rdIdx])) {
+                bool exist = false;
+                for (uint8_t idx = 0; idx < 3; ++idx)
+                    if (idx != cmpIdx && cmpInliers[idx].count(rdIdx) != 0) {
+                        exist = true;
+                        break;
+                    }
+                if (!exist) {
+                    cmpInliers[cmpIdx].emplace(rdIdx);
+                    inliers.emplace(rdIdx);
+                }
             }
-        }
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, inliersEBO);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
-                        sizeof(GLuint) * plainInliers.size(),
-                        plainInliers.data());
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        uploadCmpInliers();
     }
-    inline void UnselectInliers() {
-        inliers.clear();
-        inliersMaxPos = glm::vec3{-std::numeric_limits<GLfloat>::max()};
-        inliersMinPos = glm::vec3{+std::numeric_limits<GLfloat>::max()};
+    inline void UnselectComponent(WormPositionData::Component component) {
+        auto cmpIdx = static_cast<uint8_t>(component);
+        for (const auto val : cmpInliers[cmpIdx])
+            inliers.erase(val);
+        cmpInliers[cmpIdx].clear();
+        uploadCmpInliers();
     }
     inline void ClearCurve() { curve.clear(); }
     void RegisterWithWPD() {
@@ -260,7 +254,10 @@ class WormNeuronPositionData {
     inline const auto &GetVerts() const { return verts; }
     inline const auto GetVAO() const { return VAO; }
     inline const auto GetInliersVAO() const { return inliersVAO; }
-    inline const auto GetInliersVertCnt() const { return inliers.size(); }
+    inline const auto
+    GetComponentInliersVertCnt(WormPositionData::Component component) const {
+        return cmpInliers[static_cast<uint8_t>(component)].size();
+    }
     inline const auto GetCurveVAO() const { return curveVAO; }
     inline const auto GetCurveVertCnt() const { return curve.size(); }
     inline const auto GetPosRange() const {
@@ -285,6 +282,19 @@ class WormNeuronPositionData {
                             sizeof(glm::vec3) * nuroVertCnt, verts[t].data());
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
+    inline void uploadCmpInliers() {
+        std::vector<GLuint> plainInliers;
+        plainInliers.reserve(inliers.size());
+        for (uint8_t cmpIdx = 0; cmpIdx < 3; ++cmpIdx) {
+            for (auto id : cmpInliers[cmpIdx])
+                plainInliers.emplace_back(id);
+        }
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, inliersEBO);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                        sizeof(GLuint) * plainInliers.size(),
+                        plainInliers.data());
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    }
     Eigen::VectorXf polyCurveFitWith(uint8_t order) {
         using namespace Eigen;
         MatrixXf A(inliers.size(), order + 1);
@@ -303,150 +313,271 @@ class WormNeuronPositionData {
         return QR.solve(b);
     }
     void registerWithWPD() {
-        static constexpr auto VC_DIST_RATIO_TO_BOT = .1f;
+        static constexpr auto VC_DIST_RATIO_TO_BOT = .25f;
 
         if (wpd->GetVerts().size() == 0 || wpd->GetVerts().front().size() == 0)
             return;
         size_t timeCnt = wpd->GetVerts().size();
-        size_t wormVertCnt = wpd->GetVerts().front().size();
+        size_t wpdVertCnt = wpd->GetVerts().front().size();
 
         std::vector<GLfloat> curveLens;
         curveLens.reserve(curve.size());
         curveLens.emplace_back(0);
         for (size_t idx = 1; idx < curve.size(); ++idx)
-            curveLens.emplace_back(curveLens[idx - 1] +
+            curveLens.emplace_back(curveLens.back() +
                                    glm::distance(curve[idx - 1], curve[idx]));
 
-        float inliersAvgDistToCurve = 0;
-        std::vector<std::tuple<GLfloat, size_t>> lenAndCurveIndices;
-        lenAndCurveIndices.reserve(rawDat.size());
-        for (size_t vIdx = 0; vIdx < rawDat.size(); ++vIdx) {
+        float VCInliersMaxDistToCurv = std::numeric_limits<float>::min();
+        std::array<std::array<size_t, 2>, 3> curveCmpRange{
+            std::array<size_t, 2>{std::numeric_limits<size_t>::max(),
+                                  std::numeric_limits<size_t>::min()},
+            std::array<size_t, 2>{std::numeric_limits<size_t>::max(),
+                                  std::numeric_limits<size_t>::min()},
+            std::array<size_t, 2>{std::numeric_limits<size_t>::max(),
+                                  std::numeric_limits<size_t>::min()},
+        };
+        std::vector<size_t> rawDatToCurve;
+        rawDatToCurve.reserve(rawDat.size());
+        std::vector<size_t> outliers;
+        outliers.reserve(rawDat.size() - inliers.size());
+        for (size_t rdIdx = 0; rdIdx < rawDat.size(); ++rdIdx) {
             auto [curveIdx, dist] = [&]() {
-                GLfloat dist = std::numeric_limits<GLfloat>::max();
+                float dist = std::numeric_limits<float>::max();
                 size_t idx = 0;
-                for (size_t cIdx = 0; cIdx < curve.size(); ++cIdx) {
-                    auto currDist = glm::distance(curve[cIdx], rawDat[vIdx]);
+                for (size_t cvIdx = 0; cvIdx < curve.size(); ++cvIdx) {
+                    auto currDist = glm::distance(curve[cvIdx], rawDat[rdIdx]);
                     if (currDist < dist) {
-                        idx = cIdx;
+                        idx = cvIdx;
                         dist = currDist;
                     }
                 }
-                return std::make_pair(idx, dist);
+                return std::make_tuple(idx, dist);
             }();
-            lenAndCurveIndices.emplace_back(curveLens[curveIdx], curveIdx);
-            if (inliers.count(vIdx) != 0)
-                inliersAvgDistToCurve += dist;
+            rawDatToCurve.emplace_back(curveIdx);
+            auto cmpIdx = [&](float dist) {
+                for (uint8_t cmpIdx = 0; cmpIdx < 3; ++cmpIdx)
+                    if (cmpInliers[cmpIdx].count(rdIdx) != 0) {
+                        if (cmpIdx == 1 && VCInliersMaxDistToCurv < dist)
+                            VCInliersMaxDistToCurv = dist; // VC
+                        return cmpIdx;
+                    }
+                return (uint8_t)4;
+            }(dist);
+            if (cmpIdx == 4) {
+                // outliers
+                outliers.emplace_back(rdIdx);
+                continue;
+            }
+            if (curveCmpRange[cmpIdx][0] > curveIdx)
+                curveCmpRange[cmpIdx][0] = curveIdx;
+            if (curveCmpRange[cmpIdx][1] < curveIdx)
+                curveCmpRange[cmpIdx][1] = curveIdx;
         }
-        inliersAvgDistToCurve /= inliers.size();
 
-        std::vector<glm::vec3> VC;
-        VC.reserve(wormVertCnt);
-        std::vector<GLfloat> VCLens;
-        VCLens.reserve(wormVertCnt);
-        std::map<GLfloat, GLuint> VCLenToIndices;
-        auto startEnds = [&]() {
-            return std::array{
-                wpd->GetComponentStartEnd(WormPositionData::Component::Head),
-                wpd->GetComponentStartEnd(
-                    WormPositionData::Component::VentralCord),
-                wpd->GetComponentStartEnd(WormPositionData::Component::Tail)};
-        }();
-        for (size_t timeStep = 0; timeStep < timeCnt; ++timeStep) {
-            auto wpdVertsT = wpd->GetVerts()[timeStep];
+        std::array wpdCmpStartEnds = {
+            wpd->GetComponentStartEnd(WormPositionData::Component::Head),
+            wpd->GetComponentStartEnd(WormPositionData::Component::VentralCord),
+            wpd->GetComponentStartEnd(WormPositionData::Component::Tail)};
+        auto maxRefLineSz =
+            std::max({wpdCmpStartEnds[0][1] - wpdCmpStartEnds[0][0],
+                      wpdCmpStartEnds[1][1] - wpdCmpStartEnds[1][0],
+                      wpdCmpStartEnds[2][1] - wpdCmpStartEnds[2][0]});
+        std::vector<glm::vec3> refLine;
+        refLine.reserve(maxRefLineSz);
+        std::vector<float> refLineLens;
+        refLineLens.reserve(maxRefLineSz);
 
-            VC.clear();
-            // Head component, move along central line
-            for (GLuint idx = startEnds[0][0]; idx < startEnds[0][1]; ++idx)
-                VC.emplace_back(wpdVertsT[idx].cntrPos);
-            // transistion between Head and VC component,
-            // use linear interpolation
-            {
-                auto startPos = VC.back();
-                auto dlt = wpdVertsT[startEnds[1][0]].cntrPos - startPos;
-                float dltIdx = startEnds[1][0] - startEnds[0][1];
-                for (GLuint idx = startEnds[0][1]; idx < startEnds[1][0]; ++idx)
-                    VC.emplace_back(startPos +
-                                    (idx - startEnds[0][1]) / dltIdx * dlt);
-            }
-            // VC component, move along bottom
-            float VCAvgDistToBottom = 0;
-            for (GLuint idx = startEnds[1][0]; idx < startEnds[1][1]; ++idx) {
-                VC.emplace_back(wpdVertsT[idx].cntrPos +
-                                (1.f - 2 * VC_DIST_RATIO_TO_BOT) *
-                                    wpdVertsT[idx].delta);
-                VCAvgDistToBottom +=
-                    VC_DIST_RATIO_TO_BOT * glm::length(wpdVertsT[idx].delta);
-            }
-            VCAvgDistToBottom /= (startEnds[1][1] - startEnds[1][0]);
-            // transistion between VC and Tail component,
-            // use linear interpolation
-            {
-                auto startPos = VC.back();
-                auto dlt = wpdVertsT[startEnds[2][0]].cntrPos - startPos;
-                float dltIdx = startEnds[2][0] - startEnds[1][1];
-                for (GLuint idx = startEnds[1][1]; idx < startEnds[2][0]; ++idx)
-                    VC.emplace_back(startPos +
-                                    (idx - startEnds[1][1]) / dltIdx * dlt);
-            }
-            // Tail component, move along central line
-            for (GLuint idx = startEnds[2][0]; idx < startEnds[2][1]; ++idx)
-                VC.emplace_back(wpdVertsT[idx].cntrPos);
+        std::vector<std::tuple<size_t, float, glm::vec3>> rawDatToWPD(
+            rawDat.size());
 
-            VCLens.clear();
-            VCLens.emplace_back(0);
-            for (GLuint idx = 1; idx < VC.size(); ++idx)
-                VCLens.emplace_back(VCLens[idx - 1] +
-                                    glm::distance(VC[idx - 1], VC[idx]));
-            VCLenToIndices.clear();
-            for (GLuint idx = 0; idx < VC.size(); ++idx)
-                VCLenToIndices[VCLens[idx]] = idx;
+        // compute VC reference line first fro dltScale
+        auto &wpdVertsT0 = wpd->GetVerts().front();
+        float dltScale = std::numeric_limits<float>::max();
+        for (auto wpdIdx = wpdCmpStartEnds[1][0];
+             wpdIdx < wpdCmpStartEnds[1][1]; ++wpdIdx) {
+            auto distToBot =
+                VC_DIST_RATIO_TO_BOT * glm::length(wpdVertsT0[wpdIdx].delta);
+            if (dltScale > distToBot)
+                dltScale = distToBot;
+            refLine.emplace_back(wpdVertsT0[wpdIdx].cntrPos +
+                                 (1.f - 2 * VC_DIST_RATIO_TO_BOT) *
+                                     wpdVertsT0[wpdIdx].delta);
+        }
+        dltScale = dltScale / VCInliersMaxDistToCurv;
+        refLineLens.emplace_back(0);
+        for (size_t rfIdx = 1; rfIdx < refLine.size(); ++rfIdx)
+            refLineLens.emplace_back(
+                refLineLens.back() +
+                glm::distance(refLine[rfIdx - 1], refLine[rfIdx]));
 
-            auto lenScale = VCLens.back() / curveLens.back();
-            auto dltScale = VCAvgDistToBottom / inliersAvgDistToCurve;
-            for (size_t vIdx = 0; vIdx < rawDat.size(); ++vIdx) {
-                auto [len, curveIdx] = lenAndCurveIndices[vIdx];
-                auto scaledLen = lenScale * len;
-                auto right = VCLenToIndices.lower_bound(scaledLen);
-                if (right == VCLenToIndices.end())
-                    --right;
-                auto cntrPos = [&]() {
-                    auto lenDltRat =
-                        (scaledLen - right->first) /
-                        (right->second == 0 ? VCLens[1] - VCLens[0]
-                                            : VCLens[right->second] -
-                                                  VCLens[right->second - 1]);
-                    auto lenDlt =
-                        right->second == 0
-                            ? VC[1] - VC[0]
-                            : VC[right->second] - VC[right->second - 1];
-                    return VC[right->second] + lenDltRat * lenDlt;
-                }();
-                auto rotMat = [&](size_t curveIdx) {
-                    auto curveTgnLnDrc =
-                        curveIdx == 0 ? curve[1] - curve[0]
-                        : curveIdx == curve.size() - 1
-                            ? curve[curveIdx] - curve[curveIdx - 1]
-                            : curve[curveIdx + 1] - curve[curveIdx - 1];
-                    auto VCTgnLnDrc =
-                        right->second == 0 ? VC[1] - VC[0]
-                        : right->second == VC.size() - 1
-                            ? VC[right->second] - VC[right->second - 1]
-                            : VC[right->second + 1] - VC[right->second - 1];
-                    auto cos = glm::dot(curveTgnLnDrc, VCTgnLnDrc) /
-                               glm::length(curveTgnLnDrc) /
-                               glm::length(VCTgnLnDrc);
-                    auto sin = sqrtf(1 - cos * cos);
-                    return (curveTgnLnDrc.x * VCTgnLnDrc.y -
-                            VCTgnLnDrc.x * curveTgnLnDrc.y) > 0
-                               ? glm::mat3{cos, -sin, 0, +sin, cos,
-                                           0,   0,    0, 1.f}
-                               : glm::mat3{cos, +sin, 0, -sin, cos,
-                                           0,   0,    0, 1.f};
-                }(curveIdx);
-                verts[timeStep][vIdx] =
-                    cntrPos +
-                    dltScale * rotMat * (rawDat[vIdx] - curve[curveIdx]);
+        auto computeRefIdx = [&](size_t cvIdx, uint8_t cmpIdx) {
+            auto len =
+                (curveLens[cvIdx] - curveLens[curveCmpRange[cmpIdx][0]]) /
+                (curveLens[curveCmpRange[cmpIdx][1]] -
+                 curveLens[curveCmpRange[cmpIdx][0]]);
+            len *= refLineLens.back();
+            size_t left = 0, right = refLineLens.size() - 1;
+            while (left < right) {
+                auto mid = (left + right) / 2;
+                auto midVal = refLineLens[mid];
+                if ((mid == refLineLens.size() - 1 && midVal <= len) ||
+                    (midVal <= len && refLineLens[mid + 1] > len)) {
+                    left = mid;
+                    break;
+                } else if (midVal < len)
+                    left = mid + 1;
+                else
+                    right = mid - 1;
             }
+            auto refSegLen = left == refLineLens.size() - 1
+                                 ? refLineLens[left] - refLineLens[left - 1]
+                                 : refLineLens[left + 1] - refLineLens[left];
+            return std::make_pair(left, (len - refLineLens[left]) / refSegLen);
+        };
+        auto computeRotMat = [](const std::vector<glm::vec3> &curve0,
+                                const std::vector<glm::vec3> &curve1,
+                                size_t idx0, size_t idx1) {
+            auto tgnLn0 = idx0 == 0 ? curve0[1] - curve0[0]
+                          : idx0 == curve0.size() - 1
+                              ? curve0[idx0] - curve0[idx0 - 1]
+                              : curve0[idx0 + 1] - curve0[idx0];
+            tgnLn0.z = 0;
+            auto tgnLn1 = idx1 == 0 ? curve1[1] - curve1[0]
+                          : idx1 == curve1.size() - 1
+                              ? curve1[idx1] - curve1[idx1 - 1]
+                              : curve1[idx1 + 1] - curve1[idx1];
+            tgnLn1.z = 0;
+            auto cos = glm::dot(tgnLn0, tgnLn1) / glm::length(tgnLn0) /
+                       glm::length(tgnLn1);
+            auto sin = sqrtf(1 - cos * cos);
+            return (tgnLn0.x * tgnLn1.y - tgnLn1.x * tgnLn0.y) < 0
+                       ? glm::mat3{cos, -sin, 0, +sin, cos, 0, 0, 0, 1.f}
+                       : glm::mat3{cos, +sin, 0, -sin, cos, 0, 0, 0, 1.f};
+        };
+        auto &vertsT0 = verts.front();
+        auto warpRawDatToT0 = [&](size_t rdIdx, uint8_t cmpIdx) {
+            auto &[rfIdx, refSegOffsRatio, dlt] = rawDatToWPD[rdIdx];
+            auto cvIdx = rawDatToCurve[rdIdx];
+            std::tie(rfIdx, refSegOffsRatio) = computeRefIdx(cvIdx, cmpIdx);
+            dlt = computeRotMat(curve, refLine, cvIdx, rfIdx) *
+                  (rawDat[rdIdx] - curve[cvIdx]);
+
+            auto cntrPos =
+                rfIdx == refLine.size() - 1
+                    ? refLine[rfIdx] + refSegOffsRatio *
+                                           (refLine[rfIdx] - refLine[rfIdx - 1])
+                    : refLine[rfIdx] + refSegOffsRatio * (refLine[rfIdx + 1] -
+                                                          refLine[rfIdx]);
+            vertsT0[rdIdx] = cntrPos + dltScale * dlt;
+        };
+        for (auto rdIdx : cmpInliers[1])
+            warpRawDatToT0(rdIdx, 1);
+        for (auto rdIdx : outliers)
+            warpRawDatToT0(rdIdx, 1);
+
+        // compute head reference line
+        refLine.clear();
+        for (auto wpdIdx = wpdCmpStartEnds[0][0];
+             wpdIdx < wpdCmpStartEnds[0][1]; ++wpdIdx)
+            refLine.emplace_back(wpdVertsT0[wpdIdx].cntrPos);
+        refLineLens.clear();
+        refLineLens.emplace_back(0);
+        for (size_t rfIdx = 1; rfIdx < refLine.size(); ++rfIdx)
+            refLineLens.emplace_back(
+                refLineLens.back() +
+                glm::distance(refLine[rfIdx - 1], refLine[rfIdx]));
+        for (auto rdIdx : cmpInliers[0])
+            warpRawDatToT0(rdIdx, 0);
+
+        // compute tail reference line
+        refLine.clear();
+        for (auto wpdIdx = wpdCmpStartEnds[2][0];
+             wpdIdx < wpdCmpStartEnds[2][1]; ++wpdIdx)
+            refLine.emplace_back(wpdVertsT0[wpdIdx].cntrPos);
+        refLineLens.clear();
+        refLineLens.emplace_back(0);
+        for (size_t rfIdx = 1; rfIdx < refLine.size(); ++rfIdx)
+            refLineLens.emplace_back(
+                refLineLens.back() +
+                glm::distance(refLine[rfIdx - 1], refLine[rfIdx]));
+        for (auto rdIdx : cmpInliers[2])
+            warpRawDatToT0(rdIdx, 2);
+
+        auto computeRotMatWPD = [](decltype(wpdVertsT0) curve0,
+                                   decltype(wpdVertsT0) curve1, size_t idx0,
+                                   size_t idx1) {
+            auto tgnLn0 = idx0 == 0 ? curve0[1].cntrPos - curve0[0].cntrPos
+                          : idx0 == curve0.size() - 1
+                              ? curve0[idx0].cntrPos - curve0[idx0 - 1].cntrPos
+                              : curve0[idx0 + 1].cntrPos - curve0[idx0].cntrPos;
+            tgnLn0.z = 0;
+            auto tgnLn1 = idx1 == 0 ? curve1[1].cntrPos - curve1[0].cntrPos
+                          : idx1 == curve1.size() - 1
+                              ? curve1[idx1].cntrPos - curve1[idx1 - 1].cntrPos
+                              : curve1[idx1 + 1].cntrPos - curve1[idx1].cntrPos;
+            tgnLn1.z = 0;
+            auto cos = glm::dot(tgnLn0, tgnLn1) / glm::length(tgnLn0) /
+                       glm::length(tgnLn1);
+            cos = glm::clamp(cos, 0.f, 1.f);
+            auto sin = sqrtf(1 - cos * cos);
+            return (tgnLn0.x * tgnLn1.y - tgnLn1.x * tgnLn0.y) < 0
+                       ? glm::mat3{cos, -sin, 0, +sin, cos, 0, 0, 0, 1.f}
+                       : glm::mat3{cos, +sin, 0, -sin, cos, 0, 0, 0, 1.f};
+        };
+        for (size_t timeStep = 1; timeStep < timeCnt; ++timeStep) {
+            auto& wpdVertsT = wpd->GetVerts()[timeStep];
+            auto& vertsT = verts[timeStep];
+
+            auto warpRawDatToT = [&](size_t rdIdx, uint8_t cmpIdx) {
+                auto [rfIdx, refSegOffsRatio, dlt] = rawDatToWPD[rdIdx];
+                auto wpdIdx = wpdCmpStartEnds[cmpIdx][0] + rfIdx;
+                dlt = computeRotMatWPD(wpdVertsT0, wpdVertsT, wpdIdx, wpdIdx) *
+                      dlt;
+                auto cntrPos =
+                    rfIdx == refLine.size() - 1
+                        ? refLine[rfIdx] +
+                              refSegOffsRatio *
+                                  (refLine[rfIdx] - refLine[rfIdx - 1])
+                        : refLine[rfIdx] +
+                              refSegOffsRatio *
+                                  (refLine[rfIdx + 1] - refLine[rfIdx]);
+                vertsT[rdIdx] = cntrPos + dltScale * dlt;
+            };
+
+            // VC
+            refLine.clear();
+            dltScale = std::numeric_limits<float>::max();
+            for (auto wpdIdx = wpdCmpStartEnds[1][0];
+                 wpdIdx < wpdCmpStartEnds[1][1]; ++wpdIdx) {
+                auto distToBot =
+                    VC_DIST_RATIO_TO_BOT * glm::length(wpdVertsT[wpdIdx].delta);
+                if (dltScale > distToBot)
+                    dltScale = distToBot;
+                refLine.emplace_back(wpdVertsT[wpdIdx].cntrPos +
+                                     (1.f - 2 * VC_DIST_RATIO_TO_BOT) *
+                                         wpdVertsT[wpdIdx].delta);
+            }
+            dltScale = dltScale / VCInliersMaxDistToCurv;
+            for (auto rdIdx : cmpInliers[1])
+                warpRawDatToT(rdIdx, 1);
+            for (auto rdIdx : outliers)
+                warpRawDatToT(rdIdx, 1);
+
+            // head
+            refLine.clear();
+            for (auto wpdIdx = wpdCmpStartEnds[0][0];
+                 wpdIdx < wpdCmpStartEnds[0][1]; ++wpdIdx)
+                refLine.emplace_back(wpdVertsT[wpdIdx].cntrPos);
+            for (auto rdIdx : cmpInliers[0])
+                warpRawDatToT(rdIdx, 0);
+
+            // tail
+            refLine.clear();
+            for (auto wpdIdx = wpdCmpStartEnds[2][0];
+                 wpdIdx < wpdCmpStartEnds[2][1]; ++wpdIdx)
+                refLine.emplace_back(wpdVertsT[wpdIdx].cntrPos);
+            for (auto rdIdx : cmpInliers[2])
+                warpRawDatToT(rdIdx, 2);
         }
     }
 };

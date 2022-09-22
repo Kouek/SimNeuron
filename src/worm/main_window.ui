@@ -517,6 +517,23 @@ QGroupBox::title {
              <string>Neuron</string>
             </attribute>
             <layout class="QGridLayout" name="gridLayout_2">
+             <item row="0" column="0">
+              <widget class="QLabel" name="label_11">
+               <property name="text">
+                <string>Curve Order</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QPushButton" name="pushButtonSlctVC">
+               <property name="styleSheet">
+                <string notr="true">color: rgb(255, 0, 255);</string>
+               </property>
+               <property name="text">
+                <string>Select Ventral Cord</string>
+               </property>
+              </widget>
+             </item>
              <item row="0" column="1">
               <widget class="QSpinBox" name="spinBoxCurveFitOrder">
                <property name="minimum">
@@ -530,17 +547,33 @@ QGroupBox::title {
                </property>
               </widget>
              </item>
-             <item row="0" column="0">
-              <widget class="QLabel" name="label_11">
+             <item row="1" column="0">
+              <widget class="QPushButton" name="pushButtonSlctHead">
+               <property name="styleSheet">
+                <string notr="true">color: rgb(255, 0, 0);</string>
+               </property>
                <property name="text">
-                <string>Curve Order</string>
+                <string>Select Head</string>
                </property>
               </widget>
              </item>
-             <item row="1" column="1">
-              <widget class="QPushButton" name="pushButtonSlctInlierOrFitCurve">
+             <item row="2" column="0">
+              <widget class="QPushButton" name="pushButtonSlctTail">
+               <property name="styleSheet">
+                <string notr="true">color: rgb(0, 255, 0);</string>
+               </property>
                <property name="text">
-                <string>Select Inliers</string>
+                <string>Select Tail</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QPushButton" name="pushButtonPolyFitCurve">
+               <property name="styleSheet">
+                <string notr="true"/>
+               </property>
+               <property name="text">
+                <string>Poly Fit Curve</string>
                </property>
               </widget>
              </item>
@@ -590,7 +623,7 @@ QGroupBox::title {
              <item row="1" column="0">
               <widget class="QLabel" name="label_14">
                <property name="styleSheet">
-                <string notr="true">color: rgb(0, 125, 255);</string>
+                <string notr="true">color: rgb(255, 0, 255);</string>
                </property>
                <property name="text">
                 <string>Ventral Cord</string>
@@ -619,7 +652,7 @@ QGroupBox::title {
                 <double>0.100000000000000</double>
                </property>
                <property name="value">
-                <double>0.180000000000000</double>
+                <double>0.150000000000000</double>
                </property>
               </widget>
              </item>
@@ -721,7 +754,7 @@ QGroupBox::title {
             <double>0.010000000000000</double>
            </property>
            <property name="value">
-            <double>0.010000000000000</double>
+            <double>0.080000000000000</double>
            </property>
           </widget>
          </item>
